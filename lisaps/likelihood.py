@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
 
+import numpy as np
+from scipy import signal
+try:
+    import cupy as xp
+except:
+    import numpy as xp
+
 class Likelihood:
 
     def __init__(self, 
@@ -199,8 +206,6 @@ class Likelihood:
 
         else:
             return logl_out
-
-
 
     def get_Xtilde(self, d=None):
         if d is None:
