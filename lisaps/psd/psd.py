@@ -1,10 +1,10 @@
-from .baseclasses import BaseNoise, TDIresponse
-from .stochasticbackgrounds import StochasticBackgrounds
+from ..baseclasses import BaseNoise, TDIresponse
+from ..stochasticbackgrounds import StochasticBackgrounds
 from typing import Any, Callable
 
 import numpy as np
 
-class psd(BaseNoise, StochasticBackgrounds):
+class Psd(BaseNoise, StochasticBackgrounds):
 
     def __init__(self, 
                  asdTM=2.4e-15, 
@@ -33,8 +33,11 @@ class psd(BaseNoise, StochasticBackgrounds):
 
         BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
 
+        if not isinstance(backgrounds, list):
+            backgrounds = [backgrounds]
+
         if len(backgrounds) > 0:
-            StochasticBackgrounds.__init__(self, backgrounds, isotropicresponse=isotropicresponse, GBresponse=GBresponse, channels=self.channels, units=units)
+            StochasticBackgrounds.__init__(self, backgrounds, isotropicresponse=isotropicresponse, GBresponse=GBresponse, channels=self.channels, units=units, use_gpu=use_gpu)
 
         self.PSDS_design = None
 
@@ -44,7 +47,7 @@ class psd(BaseNoise, StochasticBackgrounds):
         self.logfmin = self.xp.log10(self.fmin)
         self.logfmax = self.xp.log10(self.fmax)
 
-        self.freqs = freqs
+        # freqs = freqs
 
         assert isinstance(splineperturbation, dict)
         self.noiseperturbation = splineperturbation['noise']
@@ -68,35 +71,36 @@ class psd(BaseNoise, StochasticBackgrounds):
                 self.noisefn = self.get_PSDS                 
 
 
-    def constmod(self, args, **kwargs):
+    def constmod(self, freqs,  args, **kwargs):
+
         key = [*args][0]
-        PSDS = self.xp.empty((args[key].shape[0], len(self.freqs), self.Ncov))
+        PSDS = self.xp.empty((args[key].shape[0], len(freqs), self.Ncov))
         ASDargs = np.atleast_2d(args[key])
         asdTM, asdOMS = self.xp.asarray(ASDargs[:, 0, np.newaxis]), self.xp.asarray(ASDargs[:, 1, np.newaxis])
 
         self.update_params(asdTM=asdTM, asdOMS=asdOMS)    
 
         for i, channel in enumerate(self.channels):
-            PSDS[:, :, i] = self.available_functions[channel](self.freqs)  
+            PSDS[:, :, i] = self.available_functions[channel](freqs)  
 
         return PSDS
     
 
-    def splinemod(self, args, knots=None, **kwargs):
+    def splinemod(self, freqs, args, knots=None, **kwargs):
         '''
         args -> spline 
         ASDs -> TM and OMS ASDs, shape: (n_in, 2)
         '''
 
         if self.fitASDs:
-            self.PSDS_design = self.constmod(self.freqs, args)      
+            self.PSDS_design = self.constmod(freqs, args)      
 
         else:
             if self.PSDS_design is None:
-                self.set_PSDS(self.freqs)   
+                self.set_PSDS(freqs)   
 
         nin = min([args[key].shape[0] for key in [*args]])
-        PSDS = self.xp.empty((nin, len(self.freqs), self.Ncov))
+        PSDS = self.xp.empty((nin, len(freqs), self.Ncov))
         
         if knots is not None:
             weights = self.xp.asarray(args['splines'].reshape(-1, len(knots)))
@@ -119,25 +123,25 @@ class psd(BaseNoise, StochasticBackgrounds):
                 PSDS[:, :, :] = self.xp.nan
                 return PSDS
 
-        logperturbation = self.logperturbation(knots=knots, weights=weights)
+        logperturbation = self.logperturbation(freqs=freqs, knots=knots, weights=weights)
         
         for i in range(self.Ncov):
             PSDS[:, :, i] = self.PSDS_design[:, :, i] * 10**(logperturbation[:, :, i])
 
         return PSDS
     
-    def logperturbation(self, knots, weights):
+    def logperturbation(self, freqs, knots, weights):
         '''
         Spline perturbation.
         '''
-        interp = self.interp(knots, weights, **self.splinekwargs)
-        logperturbation = (interp(self.xp.log10(self.freqs))).reshape(-1, len(self.freqs), self.Ncov) #put it in the same shape of PSDS
+        interp = self.interp(knots, weights, **self.interpkwargs)
+        logperturbation = (interp(self.xp.log10(freqs))).reshape(-1, len(freqs), self.Ncov) #put it in the same shape of PSDS
         
         return logperturbation
 
     
 
-    def __call__(self, noiseargs=None, backargs={}, **kwargs):
+    def __call__(self, freqs, noiseargs=None, backargs={}, **kwargs):
         '''
         compute the total PSD in each channel.
         
@@ -154,21 +158,24 @@ class psd(BaseNoise, StochasticBackgrounds):
                 2) the name of the background for the relative function
         '''
         if noiseargs is not None:
-            PSDS = self.noisefunc(args=noiseargs, **kwargs['noise'])
+            PSDS = self.noisefn(freqs=freqs, args=noiseargs, **kwargs['noise'])
 
         else:
-            PSDS = self.get_PSDS(self.freqs) * self.xp.ones(backargs[self.back[0]].shape[0])[:, self.xp.newaxis, self.xp.newaxis]
+            PSDS = self.get_PSDS(freqs) * self.xp.ones(backargs[self.back[0]].shape[0])[:, self.xp.newaxis, self.xp.newaxis]
 
         if hasattr(self, 'backgrounds'):
+
+            if not hasattr(self, 'isotropicresponse'):
+                self.set_isotropicresponse(freqs)
             
             sgwbs_all = self.xp.zeros_like(PSDS)
 
             for back in self.backgrounds:
-                    
+                
                 if len(backargs[back]) > 0:
 
-                    h2omega = self.backgrounds_fn[back](backargs[back], **kwargs[back])
-                    Sh = [self.convert_to_psd(h2omega) for i in range(self.Ncov)]
+                    h2omega = self.backgrounds_fn[back](freqs, backargs[back], **kwargs[back])
+                    Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
 
                     Shs = self.xp.array(Sh).transpose(1, 2, 0)
 

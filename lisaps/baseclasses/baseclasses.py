@@ -14,7 +14,7 @@ import scipy
 from scipy.interpolate import make_interp_spline as scipy_make_interp_spline
 from scipy.interpolate import Akima1DInterpolator as scipy_Akima1DInterpolator
 
-from .constants import *
+from ..constants import *
 
 
 class GPUobject:
@@ -77,7 +77,7 @@ class GPUobject:
 
 class BaseNoise(GPUobject):
     def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, Ncov=None, channels=None, use_gpu=False, units='hertz', interpkwargs=dict(kind='akima', axis=1)):
-        super.__init__(use_gpu=use_gpu, interpkwargs=interpkwargs)
+        GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs)
 
         self.asdTM = asdTM
         self.asdOMS = asdOMS
@@ -318,7 +318,7 @@ class TDIresponse(GPUobject):
         '''
         def __init__(self, filename, use_gpu=False, interpkwargs=dict(kind='akima', axis=0)):
 
-            super.__init__(use_gpu=use_gpu, interpkwargs=interpkwargs)
+            GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs)
 
             TDIcsd_re = self.xp.transpose( self.xp.genfromtxt(filename, delimiter=','))
             self.freqs = TDIcsd_re[0]

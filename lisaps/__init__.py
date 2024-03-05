@@ -14,4 +14,8 @@ from .lisaps import __version__
 from .lisaps import __author__
 from .lisaps import __author_email__
 
-from .lisaps import *
+from .likelihood import *
+from .psd import *
+from .stochasticbackgrounds import *
+from .constants import *
+from .baseclasses import *

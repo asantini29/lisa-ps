@@ -102,12 +102,10 @@ class Likelihood:
     def __call__(self, args, groups=None, **kwargs):
         '''
         TODO: 
-        1) test it for noise and background
-        2) allow subsetting -- what if groups are not provided?
+        2) what if groups are not provided?
         3) check vectorization
         4) check factors in front
         5) add response for individual sources
-        6) check sum, maybe it can be more efficient
         '''
         if not isinstance(groups, list):
             groups = [groups]
@@ -146,7 +144,7 @@ class Likelihood:
         #breakpoint()
 
         subset = int(ngroups / self.nsubset)
-        #hardcoded for the moment
+        #  hardcoded for the moment
         if self.rj:
             subset = 1
 
@@ -172,7 +170,6 @@ class Likelihood:
                 inds = np.where((groups[idx_stochastic + j] >= inds_all[i]) & (groups[idx_stochastic +j] < inds_all[i + 1]))
                 backargs[key] = backargs_all_dict[key][inds]
         
-            
             psd = self.compute_psd(self.freqs, noiseargs, backargs, **kwargs)
 
             if self.nsource_wf_gen > 0:
