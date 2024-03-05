@@ -22,9 +22,9 @@ class Likelihood:
                     average=False,
                     Nbins=1000,
                     window=('kaiser', 30),
-                    includenoise=True,
                     noisekeys=[],
                     backgroundkeys=[],
+                    foregroundkeys=[],
                     inf=1e14,
                     use_gpu=True,
                     return_gpu=False,
@@ -85,10 +85,11 @@ class Likelihood:
 
         self.compute_psd = compute_psd
 
-        self.includenoise = includenoise
         self.noisekeys = noisekeys
-
         self.backgroundkeys = backgroundkeys
+        self.foregroundkeys = foregroundkeys
+
+        self.setup_indeces()
 
         self.inf = inf
 
@@ -106,38 +107,24 @@ class Likelihood:
         3) check vectorization
         4) check factors in front
         5) add response for individual sources
+
+        The order that `args` has to follow is [(templates), (noise), (backgrounds), (foregrounds)]
         '''
+
+        if not isinstance(args, list):
+            args = [args]
+
+        if groups is None:
+            groups = [np.arange(np.atleast_2d(args[0]).shape[0])]
+
         if not isinstance(groups, list):
             groups = [groups]
+
         unique_groups = np.unique(np.concatenate([groups_i for groups_i in groups]))
         ngroups = unique_groups.max() + 1 if unique_groups.shape[0] > 0 else 0
 
-        idx_noise = self.nsource_wf_gen #where the noise arguments start
-        idx_stochastic = idx_noise + len(self.noisekeys)
 
-        if self.includenoise:
-            if isinstance(args, list):
-                source_wf_genargs_all = args[:idx_noise]
-                noiseargs_all = args[idx_noise : idx_stochastic]
-                backargs_all = args[idx_stochastic :]
-                backargs_all_dict = dict(zip(self.backgroundkeys, backargs_all))
-
-            
-            else:
-                noiseargs_all = [args]
-                backargs = None
-
-            noiseargs_all_dict = dict(zip(self.noisekeys, noiseargs_all))
-
-        else:
-            noiseargs = None
-            if not isinstance(args, list):
-                if self.nsource_wf_gen == 0:
-                    backargs_all = [args]
-                    backargs_all_dict = dict(zip(self.backgroundkeys, backargs_all))
-                
-                else:
-                    source_wf_genargs_all = [args]
+        wf_args_all, noise_args_all, background_args_all, foreground_args_all = self.unpack_args(args)
         
         logl_all = []
         
@@ -154,30 +141,32 @@ class Likelihood:
 
         for i in range(len(inds_all) - 1):
 
+            wf_args, noise_args, background_args, foreground_args = [], [], [], []
+
             for j in range(self.nsource_wf_gen):
                 inds = np.where((groups[j] >= inds_all[i]) & (groups[j] < inds_all[i + 1]))
-                source_wf_genargs = [source_args[inds] for source_args in source_wf_genargs_all]
+                wf_args += [wf_args_all[j][inds]]
 
+            for j in range(len(self.noisekeys)):
+                inds = np.where((groups[self.idx_noise + j] >= inds_all[i]) & (groups[self.idx_noise + j] < inds_all[i + 1]))
+                noise_args += [noise_args_all[j][inds]]
 
-            if self.includenoise:
-                noiseargs = {}
-                for j, key in enumerate(self.noisekeys):
-                    inds = np.where((groups[idx_noise + j] >= inds_all[i]) & (groups[idx_noise + j] < inds_all[i + 1]))
-                    noiseargs[key] = noiseargs_all_dict[key][inds]
-
-            backargs = {}
-            for j, key in enumerate(self.backgroundkeys):
-                inds = np.where((groups[idx_stochastic + j] >= inds_all[i]) & (groups[idx_stochastic +j] < inds_all[i + 1]))
-                backargs[key] = backargs_all_dict[key][inds]
+            for j in range(len(self.backgroundkeys)):
+                inds = np.where((groups[self.idx_background + j] >= inds_all[i]) & (groups[self.idx_background +j] < inds_all[i + 1]))
+                background_args += [background_args_all[j][inds]]
+            
+            for j in range(len(self.foregroundkeys)):
+                inds = np.where((groups[self.idx_foreground + j] >= inds_all[i]) & (groups[self.idx_foreground +j] < inds_all[i + 1]))
+                foreground_args += [foreground_args_all[j][inds]]
         
-            psd = self.compute_psd(self.freqs, noiseargs, backargs, **kwargs)
+            psd = self.compute_psd(self.freqs, noise_args, background_args, foreground_args, **kwargs)
 
             if self.nsource_wf_gen > 0:
                 h = self.xp.zeros(shape=(self.freqs[0]))
 
-                for source, wf_args in zip(self.source_wf_gen, source_wf_genargs):
+                for source, wf_args_i in zip(self.source_wf_gen, wf_args):
                         
-                        h += source(wf_args)
+                        h += source(wf_args_i)
 
                 n = self.d - h
                 ntilde = self.get_Xtilde(n)
@@ -190,12 +179,9 @@ class Likelihood:
             mempool.free_all_blocks()
 
             logl = - self.xp.sum( self.xp.sum(ntildentilde / psd, axis = -1) + self.nu * xp.sum(self.xp.log(psd), axis = -1) , axis = -1)
-
             logl_all.append(logl)
 
-
         logl_out = np.concatenate(logl_all)
-
         logl_out[~np.isfinite(logl_out)] = -self.inf
 
         if not self.return_gpu:
@@ -203,6 +189,24 @@ class Likelihood:
 
         else:
             return logl_out
+        
+    def setup_indeces(self):
+        self.idx_wf = 0
+        self.idx_noise = self.nsource_wf_gen
+        self.idx_background = self.idx_noise + len(self.noisekeys)
+        self.idx_foreground = self.idx_background + len(self.backgroundkeys)
+        self.indeces = [self.idx_wf, self.idx_noise, self.idx_background, self.idx_foreground]
+        
+    def unpack_args(self, args):
+        wf_args, noise_args, background_args, foreground_args = [], [], [], []
+        components = [wf_args, noise_args, background_args, foreground_args]
+        indeces = self.indeces + [len(args)]
+        
+        for i in range(len(components)):
+            components[i] += args[indeces[i] : indeces[i+1]]
+
+        return wf_args, noise_args, background_args, foreground_args
+        
 
     def get_Xtilde(self, d=None):
         if d is None:

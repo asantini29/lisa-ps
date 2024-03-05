@@ -7,7 +7,7 @@ from ..constants import *
 
 class StochasticBackgrounds(GPUobject):
 
-    def __init__(self, backgrounds=[], background_kwargs={}, use_gpu=False, isotropicresponse=None, GBresponse=None, channels=None, units='hertz', **kwargs):
+    def __init__(self, backgrounds=[], background_kwargs={}, foregrounds=[], foreground_kwargs={}, use_gpu=False, isotropicresponse=None, GBresponse=None, channels=None, units='hertz', **kwargs):
 
         GPUobject.__init__(self, use_gpu=use_gpu)
 
@@ -24,14 +24,25 @@ class StochasticBackgrounds(GPUobject):
                 assert back in self._implemented_backgrounds
         
         self.backgrounds = backgrounds
+        self.nbackgrounds = len(backgrounds)
 
         self.isotropicresponse_interp = self.set_responseinterp(isotropicresponse)
         #ƒself.isotropicresponse = self.set_isotropicresponse(freqs=freqs)
+
+        if not isinstance(foregrounds, list):
+                foregrounds = [foregrounds]
+
+        for fore in foregrounds:
+                assert fore in self._implemented_foregrounds
+        
+        self.foregrounds = foregrounds
+        self.nforegrounds = len(foregrounds)
 
         if GBresponse is not None:
             self.GBresponse_interp = self.set_responseinterp(GBresponse)
 
         self.set_backgrounds_fn(background_kwargs)
+        self.set_foregrounds_fn(foreground_kwargs)
 
     @property
     def conversion(self):
@@ -46,22 +57,30 @@ class StochasticBackgrounds(GPUobject):
         elif self.units == 'strain':
             self._conversion = 1 
 
-    def set_backgrounds_fn(self, background_kwargs):
-        self.backgrounds_fn = {}
-        for back in self.backgrounds:
-            if back in background_kwargs.keys():
-                bkwargs = background_kwargs[back]
-            else:
-                bkwargs = {}
-            self.backgrounds_fn[back] = self.implented_classes[back](use_gpu=self.use_gpu, **bkwargs)
-
     def convert_to_psd(self, freqs, h2omega):
         
         Sh = h2omega * (3 * H0h**2 / (4 * self.xp.pi**2 * freqs**3)) * (2 * self.xp.pi) #strain units
         if not hasattr(self, '_conversion'):
             self.conversion = freqs
         return Sh * self.conversion
+    
+    def set_backgrounds_fn(self, background_kwargs):
+        self.backgrounds_fn = []
+        for back in self.backgrounds:
+            if back in background_kwargs.keys():
+                bkwargs = background_kwargs[back]
+            else:
+                bkwargs = {}
+            self.backgrounds_fn += [self.implented_classes[back](use_gpu=self.use_gpu, **bkwargs)]
 
+    def set_foregrounds_fn(self, foreground_kwargs):
+        self.foregrounds_fn = []
+        for fore in self.foregrounds:
+            if fore in foreground_kwargs.keys():
+                fkwargs = foreground_kwargs[fore]
+            else:
+                bkwargs = {}
+            self.foregrounds_fn += [self.implented_classes[fore](use_gpu=self.use_gpu, **fkwargs)]
 
     @property
     def implemented_backgrounds(self):
@@ -69,6 +88,12 @@ class StochasticBackgrounds(GPUobject):
             'sobhs',
             'cs',
             'fopt'
+        ]
+    
+    @property
+    def implemented_foregrounds(self):
+        return [
+
         ]
 
     @property
@@ -132,7 +157,7 @@ class PowerLaw(EnergyDensity):
 
         EnergyDensity.__init__(self, use_gpu=use_gpu)
 
-        self._ndim = self.ndim
+        self._ndim = self.ndim()
         self._fknee = self.fknee
 
     def ndim(self):
@@ -190,7 +215,7 @@ class PhaseTransitions(EnergyDensity):
         return 100
     
     def check_ndim(self, args):
-        assert args.shape[-1] == self.ndim(), args.shape
+        assert args.shape[-1] == self._ndim, args.shape
 
     def h2omega_sw(self, freqs, Asw, fsw):
         fp = freqs / fsw
