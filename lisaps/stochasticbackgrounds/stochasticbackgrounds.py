@@ -132,7 +132,7 @@ class PowerLaw(EnergyDensity):
 
         EnergyDensity.__init__(self, use_gpu=use_gpu)
 
-        self._ndim = self.ndim
+        self._ndim = self.ndim()
         self._fknee = self.fknee
 
     def ndim(self):
