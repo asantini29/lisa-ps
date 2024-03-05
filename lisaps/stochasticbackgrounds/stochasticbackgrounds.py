@@ -33,13 +33,6 @@ class StochasticBackgrounds(GPUobject):
 
         self.set_backgrounds_fn(background_kwargs)
 
-        if units == 'hertz':
-            self.conversion = CENTRAL_FREQ**2
-        elif units == 'meters':
-            self.conversion = 1 / ( (2 * self.xp.pi * self.freqs) / C)**2 
-        elif units == 'strain':
-            self.conversion = 1 
-
     @property
     def conversion(self):
         return self._conversion
@@ -55,7 +48,6 @@ class StochasticBackgrounds(GPUobject):
 
     def set_backgrounds_fn(self, background_kwargs):
         self.backgrounds_fn = {}
-
         for back in self.backgrounds:
             if back in background_kwargs.keys():
                 bkwargs = background_kwargs[back]
@@ -67,7 +59,7 @@ class StochasticBackgrounds(GPUobject):
         
         Sh = h2omega * (3 * H0h**2 / (4 * self.xp.pi**2 * freqs**3)) * (2 * self.xp.pi) #strain units
         if not hasattr(self, '_conversion'):
-            self.conversion(freqs)
+            self.conversion = freqs
         return Sh * self.conversion
 
 
@@ -151,7 +143,7 @@ class PowerLaw(EnergyDensity):
         return 3e-3
     
     def check_ndim(self, args):
-        assert args.shape[-1] == self._ndim()
+        assert args.shape[-1] == self._ndim
 
     def __call__(self, freqs, args):
         self.check_ndim(args)
@@ -172,16 +164,15 @@ class PhaseTransitions(EnergyDensity):
         EnergyDensity.__init__(self, use_gpu=use_gpu)
 
         self.turb = turb
-        self._ndim = self.ndim
+        self._ndim = self.ndim()
         self._n = self.n
         self._norm = self.norm
         self._zp = self.zp
         self._gstar = self.gstar
 
-    @property
     def ndim(self):
-        return 4 if self.turb else 2
-    
+        return  4 if self.turb else 2
+        
     @property
     def n(self):
         return 7/2
@@ -199,7 +190,7 @@ class PhaseTransitions(EnergyDensity):
         return 100
     
     def check_ndim(self, args):
-        assert args.shape[-1] == self._ndim()
+        assert args.shape[-1] == self.ndim(), args.shape
 
     def h2omega_sw(self, freqs, Asw, fsw):
         fp = freqs / fsw
@@ -221,10 +212,10 @@ class PhaseTransitions(EnergyDensity):
         From ArXiv:1512.06239, I remove a term hstar from here to include it in the powerlaw amplitude
         '''
 
-        fturb = self.fturb_from_sw(fsw, self.zp)
+        fturb = self.fturb_from_sw(fsw)
 
         fp = freqs / fturb
-        hstar = self.hstar(Tstar, self.gstar)
+        hstar = self.hstar(Tstar)
 
         return fp**3 / ( (1 + fp)**(11/3) * (hstar + 8 * self.xp.pi * freqs) )
     
@@ -242,7 +233,7 @@ class PhaseTransitions(EnergyDensity):
         Asw = self.xp.array(args[:, 0])[:, self.xp.newaxis]
         fsw = self.xp.array(args[:, 1])[:, self.xp.newaxis]
 
-        h2omega_sw = self.h2omega_sw(self, freqs, Asw, fsw)
+        h2omega_sw = self.h2omega_sw(freqs, Asw, fsw)
 
         if self.turb:
             Aturb = self.xp.array(args[:, 2])[:, self.xp.newaxis]

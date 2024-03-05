@@ -21,6 +21,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
                  interpkwargs=None, 
                  fitASDs=False, 
                  backgrounds=[], 
+                 background_kwargs={},
                  isotropicresponse=None, 
                  GBresponse=None,
                  ftol=0.1,
@@ -37,7 +38,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
             backgrounds = [backgrounds]
 
         if len(backgrounds) > 0:
-            StochasticBackgrounds.__init__(self, backgrounds, isotropicresponse=isotropicresponse, GBresponse=GBresponse, channels=self.channels, units=units, use_gpu=use_gpu)
+            StochasticBackgrounds.__init__(self, backgrounds=backgrounds, background_kwargs=background_kwargs, isotropicresponse=isotropicresponse, GBresponse=GBresponse, channels=self.channels, units=units, use_gpu=use_gpu)
 
         self.PSDS_design = None
 
