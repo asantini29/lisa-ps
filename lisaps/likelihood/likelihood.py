@@ -99,6 +99,14 @@ class Likelihood:
         else:     
             self.nsubset = nsubset
 
+        @property
+        def tc_container(self):
+            return self._tc_container
+        
+        @tc_container.setter
+        def tc_container(self, tc_container=[None, None, None, None]):
+            self._tc_container = tc_container
+
     
     def __call__(self, args, groups=None, tc_container=None,**kwargs):
         '''
@@ -166,7 +174,7 @@ class Likelihood:
 
                 for source, wf_args_i in zip(self.source_wf_gen, wf_args):
                         
-                        h += source(wf_args_i)
+                    h += source(wf_args_i)
 
                 n = self.d - h
                 ntilde = self.get_Xtilde(n)
@@ -201,9 +209,13 @@ class Likelihood:
         wf_args, noise_args, background_args, foreground_args = [], [], [], []
         components = [wf_args, noise_args, background_args, foreground_args]
         indeces = self.indeces + [len(args)]
+        #breakpoint()
         
         for i in range(len(components)):
-            components[i] += args[indeces[i] : indeces[i+1]]
+            if self.tc_container[i] is not None:
+                components[i] += [self.tc_container[i][j].transform_base_parameters(arg) for j,arg in enumerate(args[indeces[i] : indeces[i+1]])]
+            else:
+                components[i] += args[indeces[i] : indeces[i+1]]
 
         return wf_args, noise_args, background_args, foreground_args
         
