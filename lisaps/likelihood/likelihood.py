@@ -100,7 +100,7 @@ class Likelihood:
             self.nsubset = nsubset
 
     
-    def __call__(self, args, groups=None, **kwargs):
+    def __call__(self, args, groups=None, tc_container=None,**kwargs):
         '''
         TODO: 
         2) what if groups are not provided?
