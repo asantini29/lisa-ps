@@ -146,7 +146,7 @@ class PowerLaw(EnergyDensity):
         assert args.shape[-1] == self._ndim
 
     def __call__(self, freqs, args):
-        self.check_ndim(args)
+        #self.check_ndim(args)
 
         A = self.xp.array(args[:, 0])[:, self.xp.newaxis]
         n = self.xp.array(args[:, 1])[:, self.xp.newaxis]
@@ -228,7 +228,7 @@ class PhaseTransitions(EnergyDensity):
         return h2omega
 
     def __call__(self, freqs, args):
-        self.check_ndim(args)
+        #self.check_ndim(args)
 
         Asw = self.xp.array(args[:, 0])[:, self.xp.newaxis]
         fsw = self.xp.array(args[:, 1])[:, self.xp.newaxis]
