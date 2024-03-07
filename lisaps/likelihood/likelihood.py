@@ -110,13 +110,13 @@ class Likelihood:
     
     def __call__(self, args, groups=None, tc_container=None,**kwargs):
         '''
-        TODO: 
-        2) what if groups are not provided?
-        3) check vectorization
-        4) check factors in front
-        5) add response for individual sources
+        TODO 
+        -) check vectorization
+        -) complete custom CUDA Kernel for spline interpolation
+        -) check factors in front
+        -) add response for individual sources
 
-        The order that `args` has to follow is [(templates), (noise), (backgrounds), (foregrounds)]
+        #* The order that `args` has to follow is [(templates), (noise), (backgrounds), (foregrounds)]
         '''
 
         if not isinstance(args, list):
