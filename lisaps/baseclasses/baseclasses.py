@@ -15,6 +15,7 @@ from scipy.interpolate import make_interp_spline as scipy_make_interp_spline
 from scipy.interpolate import Akima1DInterpolator as scipy_Akima1DInterpolator
 
 from ..constants import *
+from ..interpolation.akima import AkimaInterpolant
 
 
 class GPUobject:
@@ -65,10 +66,19 @@ class GPUobject:
                 self.interpkwargs['k'] = 3
 
         elif kind == 'akima':
-            if self.use_gpu:    
-                self.interp = cupy_Akima1DInterpolator
+
+            if ('use_numba' not in self.interpkwargs.keys()) or (self.interpkwargs['use_numba'] is False):
+                if self.use_gpu:    
+                    self.interp = cupy_Akima1DInterpolator
+                else:
+                    self.interp = scipy_Akima1DInterpolator
+            
             else:
-                self.interp = scipy_Akima1DInterpolator
+                ndim_out = self.interpkwargs['ndim_out'] if 'ndim_out' in self.interpkwargs.keys() else 2
+                threadsperblock = self.interpkwargs['threadsperblock'] if 'threadsperblock' in self.interpkwargs.keys() else 32
+                
+                AkimaInterpolantNumba = AkimaInterpolant(ndim_out=ndim_out, threadsperblock=threadsperblock)
+                self.interp = AkimaInterpolantNumba
 
         else:
             raise NotImplementedError

@@ -1,8 +1,10 @@
 from ..baseclasses import BaseNoise, TDIresponse
 from ..stochasticbackgrounds import StochasticBackgrounds
 from typing import Any, Callable
-
+from time import time
 import numpy as np
+
+import warnings
 
 class Psd(BaseNoise, StochasticBackgrounds):
 
@@ -60,6 +62,9 @@ class Psd(BaseNoise, StochasticBackgrounds):
         self.fitASDs = fitASDs
         self.set_noisefn()
 
+        if (self.fitASDs) and (self.noiseperturbation):
+            warnings.warn('Fitting both for the noise ASDs and perturbation. This will affect convergence')
+
         self.ftol = ftol
 
 
@@ -81,14 +86,12 @@ class Psd(BaseNoise, StochasticBackgrounds):
         PSDS = self.xp.empty((args.shape[0], len(freqs), self.Ncov))
         args = np.atleast_2d(args)
 
-        #asdTM, asdOMS = self.xp.asarray(args[:, 0, np.newaxis]), self.xp.asarray(args[:, 1, np.newaxis])
         asdTM, asdOMS = self.xp.asarray(args[:, 0:1]), self.xp.asarray(args[:, 1:2])
         self.update_params(asdTM=asdTM, asdOMS=asdOMS)    
 
         for i, channel in enumerate(self.channels):
 
             if (args.shape[1] > 2) and (i > 0):
-                # asdTM, asdOMS = self.xp.asarray(args[:, i, np.newaxis]), self.xp.asarray(args[:, i+1, np.newaxis])
                 asdTM, asdOMS = self.xp.asarray(args[:, 2*i:2*i+1]), self.xp.asarray(args[:, 2*i+1:2*i+2])
                 self.update_params(asdTM=asdTM, asdOMS=asdOMS)
 
@@ -97,7 +100,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
         return PSDS
     
 
-    def splinemod(self, freqs, args, knots=None, **kwargs):
+    def splinemod(self, freqs, args, groups, knots=None, **kwargs):
         '''
         args -> spline 
         ASDs -> TM and OMS ASDs, shape: (n_in, 2)
@@ -106,6 +109,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
         if self.fitASDs:
             self.PSDS_design = self.constmod(freqs, args[:1])    
             args = args[1:]  
+            groups = groups[1:]
 
         else:
             if self.PSDS_design is None:
@@ -113,32 +117,29 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
         if not isinstance(args, list):
             args = [args]
+        
+        if not isinstance(groups, list):
+            groups = [groups]
+            
 
         nin = min([arg.shape[0] for arg in args])
         PSDS = self.xp.empty((nin, len(freqs), self.Ncov))
-        
-        # inputs = max(1, int(len(args) / 2))
-        
-        # for i in range(inputs):
-        #     knots, weights = self.prepare_interp_input(args=args[2*i : 2*i+2])
 
-        #     if self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol):  
-        #         print('Knots are too close')          
-        #         PSDS[:, :, :] = self.xp.nan
-        #         return PSDS
-
-        #     logperturbation = self.logperturbation(freqs=freqs, knots=knots, weights=weights)
+        #knots, weights = self.prepare_interp_input(args=args, groups=groups)
+        knots, weights = self.prepare_interp_input_numba(args=args, groups=groups)
+        #breakpoint()
+        ftol_mask = self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1)
+        PSDS[ftol_mask[0,:], :, :] = self.xp.nan
+    
+        # if self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol):  
+        # #if self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol):  
+        #     print('Knots are too close')  
+        #     breakpoint()        
+        #     PSDS[:, :, :] = self.xp.nan
+        #     return PSDS
         
-        #     for j in range(logperturbation.shape[-1]):
-        #         PSDS[:, :, i+j] = self.PSDS_design[:, :, i] * 10**(logperturbation[:, :, j])
+        logperturbation = self.logperturbation_numba(freqs=freqs, knots=knots, weights=weights)
 
-        knots, weights = self.prepare_interp_input(args=args)
-        if self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol):  
-            #print('Knots are too close')          
-            PSDS[:, :, :] = self.xp.nan
-            return PSDS
-        
-        logperturbation = self.logperturbation(freqs=freqs, knots=knots, weights=weights)
         for j in range(logperturbation.shape[-1]):
             PSDS[:, :, j] = self.PSDS_design[:, :, j] * 10**(logperturbation[:, :, j])
 
@@ -153,6 +154,58 @@ class Psd(BaseNoise, StochasticBackgrounds):
         
         return logperturbation
     
+
+    def logperturbation_numba(self, freqs, knots, weights):
+        '''
+        Spline perturbation with numba cuda kernel.
+        '''
+        logperturbation = self.interp(self.xp.log10(freqs), knots, weights)
+
+        return logperturbation.reshape(self.Ncov, -1, freqs.shape[0]).transpose(1, 2, 0)
+    
+
+    def prepare_interp_input_numba(self, args, groups):
+        '''
+        here args is a list, probably of the fashion [ (edges), (knots) ] for all the channels.
+        I want the output to be (knots position, knots weights)
+        '''
+    
+        if args[1].shape[-1] == self.Ncov + 1:
+            edges_weights, knots_full = self.xp.asarray(args[0]), self.xp.asarray(args[1]) #always work along the `1` axis for frequency operations
+            groups_knots = groups[1]           
+    
+            leftedge_full = edges_weights[:, 0::2]
+            rightedge_full = edges_weights[:, 1::2]
+
+            groups_unique, groups_count = np.unique(groups_knots, return_counts=True)
+            ngroups = groups_unique.max().item() + 1
+            maxgroups = groups_count.max().item()
+
+            knots_full_nans = self.xp.full((ngroups, maxgroups, knots_full.shape[-1]), self.xp.nan)
+
+            leftedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmin), leftedge_full), axis=1)[:, None, :]
+            rightedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmax), rightedge_full), axis=1)[:, None, :]
+
+            for i, g in enumerate(groups_unique):
+                #breakpoint()
+                knots_full_nans[i, :groups_count[i]] = knots_full[groups_knots == g]
+
+            knots_full_nans = self.xp.concatenate((leftedge_full, knots_full_nans, rightedge_full), axis = 1)
+            
+            positions = knots_full_nans[:,:,:1]
+            weights = knots_full_nans[:,:,1:]
+
+            ii = self.xp.argsort(positions, axis = 1)
+            sortedpositions = self.xp.take_along_axis(positions, ii, axis=1)
+            sortedpositions = self.xp.repeat(sortedpositions, 3, axis = -1).transpose(2,0,1)
+
+            sortedweights = self.xp.take_along_axis(weights, ii, axis=1).transpose(2,0,1)
+
+            return sortedpositions, sortedweights
+                
+
+
+
 
     def prepare_interp_input(self, args):
         '''
@@ -180,7 +233,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
             return knots, weights
 
 
-    def __call__(self, freqs, noiseargs=[], backargs=[], foreargs=[], **kwargs):
+    def __call__(self, freqs, noiseargs=[], backargs=[], foreargs=[], noisegroups=[], backgroups=[], foregroups=[], **kwargs):
         '''
         compute the total PSD in each channel.
         
@@ -196,7 +249,8 @@ class Psd(BaseNoise, StochasticBackgrounds):
                 1) `noise`: for the noise function;
                 2) the name of the background for the relative function
         '''
-        PSDS = self.noisefn(freqs=freqs, args=noiseargs, **kwargs['noise'])
+        PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
+
         # TODO: make sure the dimensions are fine
         # PSDS = self.get_PSDS(freqs) * self.xp.ones(backargs[self.back[0]].shape[0])[:, self.xp.newaxis, self.xp.newaxis]
         if self.xp.any(self.xp.isnan(PSDS)):

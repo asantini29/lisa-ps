@@ -133,6 +133,7 @@ class Likelihood:
 
 
         wf_args_all, noise_args_all, background_args_all, foreground_args_all = self.unpack_args(args)
+        wf_groups_all, noise_groups_all, background_groups_all, foreground_groups_all = self.unpack_groups(groups)
         
         logl_all = []
         
@@ -140,8 +141,8 @@ class Likelihood:
 
         subset = int(ngroups / self.nsubset)
         #  hardcoded for the moment
-        if self.rj:
-            subset = 1
+        #if self.rj:
+        #    subset = 1
 
         inds_all = np.arange(0, ngroups+1, subset)
         if inds_all[-1] < ngroups:
@@ -150,24 +151,40 @@ class Likelihood:
         for i in range(len(inds_all) - 1):
 
             wf_args, noise_args, background_args, foreground_args = [], [], [], []
+            wf_groups, noise_groups, background_groups, foreground_groups = [], [], [], []
 
             for j in range(self.nsource_wf_gen):
-                inds = np.where((groups[j] >= inds_all[i]) & (groups[j] < inds_all[i + 1]))
+                #inds = np.where((groups[j] >= inds_all[i]) & (groups[j] < inds_all[i + 1]))
+                inds = np.where((wf_groups_all[j] >= inds_all[i]) & (wf_groups_all[j] < inds_all[i + 1]))
                 wf_args += [wf_args_all[j][inds]]
+                wf_groups += [wf_groups_all[j][inds]]
 
             for j in range(len(self.noisekeys)):
-                inds = np.where((groups[self.idx_noise + j] >= inds_all[i]) & (groups[self.idx_noise + j] < inds_all[i + 1]))
+                #inds = np.where((groups[self.idx_noise + j] >= inds_all[i]) & (groups[self.idx_noise + j] < inds_all[i + 1]))
+                inds = np.where((noise_groups_all[j] >= inds_all[i]) & (noise_groups_all[j] < inds_all[i + 1]))
                 noise_args += [noise_args_all[j][inds]]
+                noise_groups += [noise_groups_all[j][inds]]
 
             for j in range(len(self.backgroundkeys)):
-                inds = np.where((groups[self.idx_background + j] >= inds_all[i]) & (groups[self.idx_background +j] < inds_all[i + 1]))
+                #inds = np.where((groups[self.idx_background + j] >= inds_all[i]) & (groups[self.idx_background +j] < inds_all[i + 1]))
+                inds = np.where((background_groups_all[j] >= inds_all[i]) & (background_groups_all[j] < inds_all[i + 1]))
                 background_args += [background_args_all[j][inds]]
+                background_groups += [background_groups_all[j][inds]]
             
             for j in range(len(self.foregroundkeys)):
-                inds = np.where((groups[self.idx_foreground + j] >= inds_all[i]) & (groups[self.idx_foreground +j] < inds_all[i + 1]))
+                #inds = np.where((groups[self.idx_foreground + j] >= inds_all[i]) & (groups[self.idx_foreground +j] < inds_all[i + 1]))
+                inds = np.where((foreground_groups_all[j] >= inds_all[i]) & (foreground_groups_all[j] < inds_all[i + 1]))
                 foreground_args += [foreground_args_all[j][inds]]
+                foreground_groups += [foreground_groups_all[j][inds]]
         
-            psd = self.compute_psd(self.freqs, noise_args, background_args, foreground_args, **kwargs)
+            psd = self.compute_psd(self.freqs, 
+                                   noise_args, 
+                                   background_args, 
+                                   foreground_args, 
+                                   noise_groups,
+                                   background_groups,
+                                   foreground_groups,
+                                   **kwargs)
 
             if self.nsource_wf_gen > 0:
                 h = self.xp.zeros(shape=(self.freqs[0]))
@@ -218,6 +235,17 @@ class Likelihood:
                 components[i] += args[indeces[i] : indeces[i+1]]
 
         return wf_args, noise_args, background_args, foreground_args
+    
+    def unpack_groups(self, groups):
+        wf_groups, noise_groups, background_groups, foreground_groups = [], [], [], []
+        components = [wf_groups, noise_groups, background_groups, foreground_groups]
+        indeces = self.indeces + [len(groups)]
+        #breakpoint()
+        
+        for i in range(len(components)):
+            components[i] += groups[indeces[i] : indeces[i+1]]
+
+        return wf_groups, noise_groups, background_groups, foreground_groups
         
 
     def get_Xtilde(self, d=None):
