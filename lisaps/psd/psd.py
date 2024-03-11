@@ -129,7 +129,8 @@ class Psd(BaseNoise, StochasticBackgrounds):
         knots, weights = self.prepare_interp_input_numba(args=args, groups=groups)
         #breakpoint()
         ftol_mask = self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1)
-        PSDS[ftol_mask[0,:], :, :] = self.xp.nan
+        ftol_mask = self.xp.broadcast_to(ftol_mask, (freqs.shape[0], self.Ncov, nin)).transpose(2, 0, 1)
+        PSDS[ftol_mask] = self.xp.nan
     
         # if self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol):  
         # #if self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol):  
@@ -182,7 +183,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
             maxgroups = groups_count.max().item()
 
             knots_full_nans = self.xp.full((ngroups, maxgroups, knots_full.shape[-1]), self.xp.nan)
-
+            #breakpoint()
             leftedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmin), leftedge_full), axis=1)[:, None, :]
             rightedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmax), rightedge_full), axis=1)[:, None, :]
 
@@ -253,49 +254,49 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
         # TODO: make sure the dimensions are fine
         # PSDS = self.get_PSDS(freqs) * self.xp.ones(backargs[self.back[0]].shape[0])[:, self.xp.newaxis, self.xp.newaxis]
-        if self.xp.any(self.xp.isnan(PSDS)):
-            return PSDS
+        # if self.xp.any(self.xp.isnan(PSDS)):
+        #    return PSDS
         
-        else:
-            if self.nbackgrounds > 0:
+        # else:
+        if self.nbackgrounds > 0:
 
-                if not hasattr(self, 'isotropicresponse'):
-                    self.set_isotropicresponse(freqs)
+            if not hasattr(self, 'isotropicresponse'):
+                self.set_isotropicresponse(freqs)
+            
+            sgwbs_all = self.xp.zeros_like(PSDS)
+
+            for i in range(self.nbackgrounds):
                 
-                sgwbs_all = self.xp.zeros_like(PSDS)
+                if len(backargs[i]) > 0:
+                    back = self.backgrounds[i]
+                    h2omega = self.backgrounds_fn[i](freqs, backargs[i], **kwargs[back])
+                    Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
 
-                for i in range(self.nbackgrounds):
-                    
-                    if len(backargs[i]) > 0:
-                        back = self.backgrounds[i]
-                        h2omega = self.backgrounds_fn[i](freqs, backargs[i], **kwargs[back])
-                        Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
+                    Shs = self.xp.array(Sh).transpose(1, 2, 0)
 
-                        Shs = self.xp.array(Sh).transpose(1, 2, 0)
+                    response = self.isotropicresponse[self.xp.newaxis, :, :]
+        
+                    sgwbs_all += Shs * response         
 
-                        response = self.isotropicresponse[self.xp.newaxis, :, :]
-            
-                        sgwbs_all += Shs * response         
+            PSDS = PSDS + sgwbs_all
+        
+        if self.nforegrounds > 0:
 
-                PSDS = PSDS + sgwbs_all
-            
-            if self.nforegrounds > 0:
+            if not hasattr(self, 'GBresponse'):
+                self.set_GBresponse(freqs)
 
-                if not hasattr(self, 'GBresponse'):
-                    self.set_GBresponse(freqs)
+            sgwfs_all = self.xp.zeros_like(PSDS)
 
-                sgwfs_all = self.xp.zeros_like(PSDS)
+            for i in range(self.nforegrounds):
+                
+                if len(foreargs[i]) > 0:
+                    fore = self.foregrounds[i]
+                    h2omega = self.foregrounds_fn[i](freqs, foreargs[i], **kwargs[fore])
+                    Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
 
-                for i in range(self.nforegrounds):
-                    
-                    if len(foreargs[i]) > 0:
-                        fore = self.foregrounds[i]
-                        h2omega = self.foregrounds_fn[i](freqs, foreargs[i], **kwargs[fore])
-                        Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
-
-                        # Shs = self.xp.array(Sh).transpose(1, 2, 0)
-                        # response = self.GBresponse[self.xp.newaxis, :, :]
-                        # sgwbs_all += Shs * response 
+                    # Shs = self.xp.array(Sh).transpose(1, 2, 0)
+                    # response = self.GBresponse[self.xp.newaxis, :, :]
+                    # sgwbs_all += Shs * response 
 
 
-            return PSDS
+        return PSDS

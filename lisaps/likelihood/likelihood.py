@@ -205,7 +205,7 @@ class Likelihood:
 
             logl = - self.xp.sum( self.xp.sum(ntildentilde / psd, axis = -1) + self.nu * xp.sum(self.xp.log(psd), axis = -1) , axis = -1)
             logl_all.append(logl)
-
+            
         logl_out = np.concatenate(logl_all)
         logl_out[~np.isfinite(logl_out)] = -self.inf
 
