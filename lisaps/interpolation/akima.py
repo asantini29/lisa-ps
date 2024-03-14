@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 try:
     import cupy as xp
+    from cupy.cuda import function
+    from numba import cuda
 except (ModuleNotFoundError, ImportError):
     import numpy as xp
 
-import cupy as xp
-from cupy.cuda import function
-from numba import cuda
 import numpy as np
 import math
 
