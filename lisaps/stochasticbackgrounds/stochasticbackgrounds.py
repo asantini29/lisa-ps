@@ -21,7 +21,8 @@ class StochasticBackgrounds(GPUobject):
                 backgrounds = [backgrounds]
 
         for back in backgrounds:
-                assert back in self._implemented_backgrounds
+            if back not in self._implemented_backgrounds:
+                raise ValueError
         
         self.backgrounds = backgrounds
         self.nbackgrounds = len(backgrounds)

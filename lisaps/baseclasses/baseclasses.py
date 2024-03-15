@@ -118,6 +118,22 @@ class BaseNoise(GPUobject):
 
         self.units = units
 
+    @property
+    def asdTM(self):
+        return self._asdTM
+    
+    @asdTM.setter
+    def asdTM(self, asdTM=2.4e-15):
+        self._asdTM = asdTM
+
+    @property
+    def asdOMS(self):
+        return self._asdOMS
+    
+    @asdOMS.setter
+    def asdOMS(self, asdOMS=7.9e-12):
+        self._asdOMS = asdOMS
+
     def update_params(self, asdTM=2.4e-15, asdOMS=7.9e-12):
         self.asdTM = asdTM
         self.asdOMS = asdOMS
@@ -291,13 +307,13 @@ class BaseNoise(GPUobject):
         Uncorrelated noise in the A, E tdi channels
         '''
         #return xp.atleast_2d(testmass_A(asd=asdTM)**2) + xp.atleast_2d(oms_A(asd=asdOMS)**2)
-        return self.testmass_A(freqs)**2 + self.oms_A(freqs)**2
+        return self.testmass_A(freqs)**2 + self.oms_A(freqs)**2 
 
     def get_ST(self, freqs):
         '''
         Uncorrelated noise in the T tdi channel
         '''
-        #return xp.atleast_2d(testmass_T(asd=asdTM)**2) + xp.atleast_2d(oms_T(asd=asdOMS)**2)
+        #return xp.atleast_2d(testmass_T(asd=asdTM)**2) + xp.atleast_2d(oms_T(asd=asdOMS)*2)
         return self.testmass_T(freqs)**2 + self.oms_T(freqs)**2 
 
     def set_PSDS(self, freqs):

@@ -22,6 +22,7 @@ class Likelihood:
                     average=False,
                     Nbins=1000,
                     window=('kaiser', 30),
+                    Nbw=None,
                     noisekeys=[],
                     backgroundkeys=[],
                     foregroundkeys=[],
@@ -55,7 +56,8 @@ class Likelihood:
             assert (d.shape[0] == t.shape[0]) and (d.shape[1] == self.nchannels), 'Dimensionality mismatch'
             self.d = d
             self.window = signal.get_window(window, d.shape[0]) if window is not None else np.ones_like(t)
-            self.Nbw = d.shape[0] * np.sum(self.window**2) / np.sum(self.window)**2
+
+            self.Nbw = Nbw if Nbw is not None else d.shape[0] * np.sum(self.window**2) / np.sum(self.window)**2
             
             self.dt = t[1] - t[0]
             freqs = np.fft.rfftfreq(d.shape[0], self.dt)
@@ -131,7 +133,6 @@ class Likelihood:
         unique_groups = np.unique(np.concatenate([groups_i for groups_i in groups]))
         ngroups = unique_groups.max() + 1 if unique_groups.shape[0] > 0 else 0
 
-
         wf_args_all, noise_args_all, background_args_all, foreground_args_all = self.unpack_args(args)
         wf_groups_all, noise_groups_all, background_groups_all, foreground_groups_all = self.unpack_groups(groups)
         
@@ -160,19 +161,16 @@ class Likelihood:
                 wf_groups += [wf_groups_all[j][inds]]
 
             for j in range(len(self.noisekeys)):
-                #inds = np.where((groups[self.idx_noise + j] >= inds_all[i]) & (groups[self.idx_noise + j] < inds_all[i + 1]))
                 inds = np.where((noise_groups_all[j] >= inds_all[i]) & (noise_groups_all[j] < inds_all[i + 1]))
                 noise_args += [noise_args_all[j][inds]]
                 noise_groups += [noise_groups_all[j][inds]]
 
             for j in range(len(self.backgroundkeys)):
-                #inds = np.where((groups[self.idx_background + j] >= inds_all[i]) & (groups[self.idx_background +j] < inds_all[i + 1]))
                 inds = np.where((background_groups_all[j] >= inds_all[i]) & (background_groups_all[j] < inds_all[i + 1]))
                 background_args += [background_args_all[j][inds]]
                 background_groups += [background_groups_all[j][inds]]
             
             for j in range(len(self.foregroundkeys)):
-                #inds = np.where((groups[self.idx_foreground + j] >= inds_all[i]) & (groups[self.idx_foreground +j] < inds_all[i + 1]))
                 inds = np.where((foreground_groups_all[j] >= inds_all[i]) & (foreground_groups_all[j] < inds_all[i + 1]))
                 foreground_args += [foreground_args_all[j][inds]]
                 foreground_groups += [foreground_groups_all[j][inds]]
@@ -203,7 +201,10 @@ class Likelihood:
             mempool = xp.get_default_memory_pool()
             mempool.free_all_blocks()
 
-            logl = - self.xp.sum( self.xp.sum(ntildentilde / psd, axis = -1) + self.nu * xp.sum(self.xp.log(psd), axis = -1) , axis = -1)
+            cov = psd
+
+            logl = - self.xp.sum( self.xp.sum(ntildentilde / cov, axis = -1) + self.nu * xp.sum(self.xp.log(cov), axis = -1) , axis = -1)
+
             logl_all.append(logl)
             
         logl_out = np.concatenate(logl_all)
@@ -251,7 +252,8 @@ class Likelihood:
     def get_Xtilde(self, d=None):
         if d is None:
             d = self.d
-        Xtilde = self.xp.asarray([np.fft.rfft(d[:, i] * self.window)[self.frequencymask] * np.sqrt(2 * self.dt / np.sum(self.window**2)) for i in range(self.nchannels)]).T #ALREADY NORMALIZED, refer to arXiv:2302.12573
+        norm = 2
+        Xtilde = self.xp.asarray([np.fft.rfft(d[:, i] * self.window)[self.frequencymask] * np.sqrt(norm * self.dt / np.sum(self.window**2)) for i in range(self.nchannels)]).T #ALREADY NORMALIZED, refer to arXiv:2302.12573
         return Xtilde
 
     
@@ -276,12 +278,25 @@ class Likelihood:
         for i, (start, stop) in enumerate(zip(edges[:-1], edges[1:])):
             mask = (freqs >= start) & (freqs < stop)
             centers[i] = self.xp.median(freqs[mask])
-            nu[i] = len(freqs[mask]) / self.Nbw
+
+            #nu[i] = len(freqs[mask]) / self.Nbw
+            nu[i] = 2
  
             Y[:, i, :] = self.xp.mean(dtildedtilde[:, mask, :], axis = 1) * nu[i] # eq 29 in arXiv:2302.12573
 
         return centers, Y, nu
     
+
+    def whittle_logl(self, ntilde, cov):
+        
+        pass
+    
+    def wishart_logl(self, ntilde, cov):
+
+        pass
+
+    
+
 
             
 

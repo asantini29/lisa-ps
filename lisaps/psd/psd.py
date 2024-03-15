@@ -4,6 +4,8 @@ from typing import Any, Callable
 from time import time
 import numpy as np
 
+from cupyx.scipy.interpolate import Akima1DInterpolator as cupy_Akima1DInterpolator
+
 import warnings
 
 class Psd(BaseNoise, StochasticBackgrounds):
@@ -93,7 +95,9 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
             if (args.shape[1] > 2) and (i > 0):
                 asdTM, asdOMS = self.xp.asarray(args[:, 2*i:2*i+1]), self.xp.asarray(args[:, 2*i+1:2*i+2])
-                self.update_params(asdTM=asdTM, asdOMS=asdOMS)
+                self.asdTM = asdTM
+                self.asdOMS = asdOMS
+                #self.update_params(asdTM=asdTM, asdOMS=asdOMS)
 
             PSDS[:, :, i] = self.available_functions[channel](freqs)  
 
@@ -121,28 +125,25 @@ class Psd(BaseNoise, StochasticBackgrounds):
         if not isinstance(groups, list):
             groups = [groups]
             
+        #splinepert = cupy_Akima1DInterpolator(x=self.xp.array([-4., -3.6, -3.1, -2.2, np.log10(2.5e-2)]), y=self.xp.array([0.0, -0.2, 0.3, -0.7, 0.0]))
 
         nin = min([arg.shape[0] for arg in args])
         PSDS = self.xp.empty((nin, len(freqs), self.Ncov))
 
         #knots, weights = self.prepare_interp_input(args=args, groups=groups)
         knots, weights = self.prepare_interp_input_numba(args=args, groups=groups)
+        
         #breakpoint()
         ftol_mask = self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1)
         ftol_mask = self.xp.broadcast_to(ftol_mask, (freqs.shape[0], self.Ncov, nin)).transpose(2, 0, 1)
         PSDS[ftol_mask] = self.xp.nan
-    
-        # if self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol):  
-        # #if self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol):  
-        #     print('Knots are too close')  
-        #     breakpoint()        
-        #     PSDS[:, :, :] = self.xp.nan
-        #     return PSDS
         
         logperturbation = self.logperturbation_numba(freqs=freqs, knots=knots, weights=weights)
 
-        for j in range(logperturbation.shape[-1]):
-            PSDS[:, :, j] = self.PSDS_design[:, :, j] * 10**(logperturbation[:, :, j])
+        #breakpoint()
+        # for j in range(logperturbation.shape[-1]):
+        #     PSDS[:, :, j] = self.PSDS_design[:, :, j] * 10**(logperturbation[:, :, j]) #* 10**(splinepert(self.xp.log10(freqs)))[None, None, :]
+        PSDS = self.PSDS_design * 10**(logperturbation)
 
         return PSDS
     
@@ -198,15 +199,12 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
             ii = self.xp.argsort(positions, axis = 1)
             sortedpositions = self.xp.take_along_axis(positions, ii, axis=1)
-            sortedpositions = self.xp.repeat(sortedpositions, 3, axis = -1).transpose(2,0,1)
+            sortedpositions = self.xp.repeat(sortedpositions, self.Ncov, axis = -1).transpose(2,0,1)
 
             sortedweights = self.xp.take_along_axis(weights, ii, axis=1).transpose(2,0,1)
 
             return sortedpositions, sortedweights
                 
-
-
-
 
     def prepare_interp_input(self, args):
         '''
@@ -274,9 +272,21 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
                     Shs = self.xp.array(Sh).transpose(1, 2, 0)
 
-                    response = self.isotropicresponse[self.xp.newaxis, :, :]
-        
-                    sgwbs_all += Shs * response         
+                    response = self.isotropicresponse[self.xp.newaxis, :, :]            
+
+                    if self.backgroundperturbation:
+
+                        #bknots, bweights = self.prepare_interp_input_numba(backargs[-2:], backgroups[-2:])
+                        bknots, bweights = self.prepare_interp_input_numba(backargs[self.nbackgrounds+2*i:self.nbackgrounds+2*(i+1)], backgroups[self.nbackgrounds+2*i:self.nbackgrounds+2*(i+1)])
+
+                        ftol_mask = self.xp.any(self.xp.abs(self.xp.diff(bknots)) < self.ftol, axis=-1)
+                        ftol_mask = self.xp.broadcast_to(ftol_mask, (freqs.shape[0], self.Ncov, PSDS.shape[0])).transpose(2, 0, 1)
+                        
+                        logperturbation = self.logperturbation_numba(freqs=freqs, knots=bknots, weights=bweights)
+
+                        Shs = Shs * 10**logperturbation
+                
+                sgwbs_all += Shs * response    
 
             PSDS = PSDS + sgwbs_all
         
