@@ -20,6 +20,8 @@ class Likelihood:
                     source_wf_gen=None,
                     nchannels=3,
                     average=False,
+                    correlated=False,
+                    fullmatrix=False,
                     Nbins=1000,
                     window=('kaiser', 30),
                     Nbw=None,
@@ -61,6 +63,7 @@ class Likelihood:
             
             self.dt = t[1] - t[0]
             freqs = np.fft.rfftfreq(d.shape[0], self.dt)
+            #freqs = np.fft.fftfreq(d.shape[0], self.dt)
             self.frequencymask = (freqs > fmin) & (freqs < fmax) # remove ALL the wiggles CAREFULL: we MUST find a way to include them
 
             freqs = self.xp.array(freqs[self.frequencymask])
@@ -71,12 +74,17 @@ class Likelihood:
             
             self.nsource_wf_gen = 0
 
+            self.correlated = correlated
+            self.fullmatrix = fullmatrix
+
             if average: # without signal we can use an averaged likelihood
-                self.freqs, self.dtildedtilde, self.nu = self.average(freqs, Nbins)
+                self.freqs, self.Y, self.nu = self.average(freqs, Nbins)
+                self.compute_logl = self.wishart_logl
             else:
                 self.freqs = freqs
-                self.dtildedtilde = self.get_XtildeXtilde(dtilde)
+                self.dtildedtilde =self.get_XtildeXtilde(dtilde)
                 self.nu = 1
+                self.compute_logl = self.whittle_logl
 
         else:                
                 
@@ -140,12 +148,13 @@ class Likelihood:
         
         #breakpoint()
 
-        subset = int(ngroups / self.nsubset)
-        #  hardcoded for the moment
-        #if self.rj:
-        #    subset = 1
-
-        inds_all = np.arange(0, ngroups+1, subset)
+        subset = int(ngroups / self.nsubset) if ngroups > self.nsubset else ngroups
+        
+        try:
+            inds_all = np.arange(0, ngroups+1, subset)
+        except:
+            breakpoint()
+        
         if inds_all[-1] < ngroups:
             inds_all = np.concatenate([inds_all, np.array([ngroups])])
 
@@ -196,14 +205,13 @@ class Likelihood:
                 ntildentilde = self.get_XtildeXtilde(ntilde)
 
             else:
-                ntildentilde = self.dtildedtilde
+                ntilde = self.dtilde[self.xp.newaxis, :, :]
 
             mempool = xp.get_default_memory_pool()
             mempool.free_all_blocks()
 
-            cov = psd
-
-            logl = - self.xp.sum( self.xp.sum(ntildentilde / cov, axis = -1) + self.nu * xp.sum(self.xp.log(cov), axis = -1) , axis = -1)
+            logl = self.compute_logl(ntilde, psd)
+            #logl = - self.xp.sum( self.xp.sum(ntildentilde / cov, axis = -1) + self.nu * xp.sum(self.xp.log(cov), axis = -1) , axis = -1)
 
             logl_all.append(logl)
             
@@ -260,42 +268,92 @@ class Likelihood:
     def get_XtildeXtilde(self, dtilde=None):
         if dtilde is None:
             dtilde = self.dtilde
-        return xp.real(xp.conj(dtilde) * dtilde)[xp.newaxis, :, :] #vectorized over axis 0
+        if self.fullmatrix:
+            return self.xp.einsum('...i,...j->...ij', self.xp.conj(dtilde), dtilde)[self.xp.newaxis, :, :, :] #vectorized over axis 0
+            #return self.xp.real(self.xp.einsum('...i,...j->...ij', self.xp.conj(dtilde), dtilde))[self.xp.newaxis, :, :, :] #vectorized over axis 0
+        else:
+            return  self.xp.abs(self.xp.conj(dtilde) * dtilde)[self.xp.newaxis, :, :] #vectorized over axis 0
+            #return self.xp.real(self.xp.conj(dtilde) * dtilde)[self.xp.newaxis, :, :] #vectorized over axis 0
 
 
     def average(self, freqs, Nbins):
 
         dtildedtilde = self.get_XtildeXtilde()
+        #? not sure why I'm doing this, have to check 
         if freqs.shape[0] // 2 != 0:
             freqs = freqs[1:]
-            dtildedtilde = dtildedtilde[:, 1:, :]
+            dtildedtilde = dtildedtilde[:, 1:]
 
-        edges = self.xp.linspace(freqs.min(), freqs.max(), Nbins + 1, endpoint=True)
-        centers = self.xp.zeros(Nbins)
-        nu = self.xp.zeros(Nbins)       
-        Y = self.xp.zeros(shape=(1, Nbins, self.nchannels))
+        edges = self.xp.linspace(freqs.min(), freqs.max(), Nbins + 1, endpoint=True) #edges of frequency bins
+        centers = self.xp.zeros(Nbins) #centers of frequency bins
+        nu = self.xp.zeros(Nbins) #effective DoFs
+
+        periodgram_shape = (1, Nbins,) + dtildedtilde.shape[2:]
+        Y = self.xp.zeros(shape=periodgram_shape)
 
         for i, (start, stop) in enumerate(zip(edges[:-1], edges[1:])):
             mask = (freqs >= start) & (freqs < stop)
             centers[i] = self.xp.median(freqs[mask])
 
-            #nu[i] = len(freqs[mask]) / self.Nbw
-            nu[i] = 2
+            nu[i] = len(freqs[mask]) / self.Nbw
  
-            Y[:, i, :] = self.xp.mean(dtildedtilde[:, mask, :], axis = 1) * nu[i] # eq 29 in arXiv:2302.12573
+            Y[:, i] = self.xp.mean(dtildedtilde[:, mask], axis = 1) * nu[i] # eq 29 in arXiv:2302.12573
 
         return centers, Y, nu
     
 
-    def whittle_logl(self, ntilde, cov):
+    def whittle_logl(self, ntilde, psd):
         
-        pass
-    
-    def wishart_logl(self, ntilde, cov):
+        if self.fullmatrix:
+            cov = self.get_covariance(psd)
+            ntilde_rep = self.xp.repeat(ntilde, cov.shape[0], axis=0)
+            ntildeconj_invcov = self.xp.linalg.solve(cov, self.xp.conj(ntilde_rep)[:, :, :])
+            detcov = self.xp.linalg.det(cov)
+            del cov
+            ntildentilde = self.xp.einsum('ijk,ijk -> ij', ntildeconj_invcov, ntilde)
+            logl = - self.xp.sum(ntildentilde + self.xp.log(detcov), axis=-1)
 
-        pass
+        else:
+            cov = psd
+            ntildentilde = self.get_XtildeXtilde()
+            logl = - self.xp.sum( ntildentilde / cov + self.xp.log(cov),  axis = (1, 2))
+
+        return logl
+    
+    def wishart_logl(self, ntilde, psd):
+
+        if self.fullmatrix:
+            cov = self.get_covariance(psd)
+            invcov = self.xp.linalg.inv(cov)
+            detcov = self.xp.linalg.det(cov)
+            del cov
+
+            return -  self.xp.sum(self.xp.einsum('...ii', self.xp.einsum('...ij, ...jk->...ik', invcov, self.Y)) + self.nu * self.xp.log(detcov), axis=-1)
+
+        else:
+            cov = psd
+            return -  self.xp.sum(self.xp.sum(self.Y / cov, axis=-1) + self.nu * self.xp.sum(self.xp.log(cov), axis=-1), axis=-1)
 
     
+    def get_covariance(self, psd):
+        nin, nfreqs = psd.shape[0], psd.shape[1]
+        covariance = self.xp.zeros(shape=(nin, nfreqs, self.nchannels, self.nchannels))
+
+        for i in range(self.nchannels):
+            covariance[:,:,i,i] = psd[:,:,i]
+
+        if self.correlated:
+            covariance[:,:,0,1] = psd[:,:,3]  
+            covariance[:,:,0,2] = psd[:,:,4]  
+            covariance[:,:,1,2] = psd[:,:,5]
+
+            covariance[:,:,1,0] = self.xp.conj(psd[:,:,3])
+            covariance[:,:,2,0] = self.xp.conj(psd[:,:,4])
+            covariance[:,:,2,1] = self.xp.conj(psd[:,:,5])
+
+        return covariance
+
+        
 
 
             

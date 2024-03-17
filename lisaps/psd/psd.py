@@ -16,6 +16,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
                  fmin=1e-4, 
                  fmax=2.5e-2, 
                  freqs=None,
+                 equal_arms=False,
                  Ncov=None, 
                  channels=None, 
                  use_gpu=False, 
@@ -38,7 +39,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
             asdTM = 0.
             asdOMS = 0.
 
-        BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
+        BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, equal_arms=equal_arms, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
 
         if not isinstance(backgrounds, list):
             backgrounds = [backgrounds]
@@ -89,7 +90,8 @@ class Psd(BaseNoise, StochasticBackgrounds):
         args = np.atleast_2d(args)
 
         asdTM, asdOMS = self.xp.asarray(args[:, 0:1]), self.xp.asarray(args[:, 1:2])
-        self.update_params(asdTM=asdTM, asdOMS=asdOMS)    
+        self.asdTM = asdTM
+        self.asdOMS = asdOMS
 
         for i, channel in enumerate(self.channels):
 
@@ -97,7 +99,6 @@ class Psd(BaseNoise, StochasticBackgrounds):
                 asdTM, asdOMS = self.xp.asarray(args[:, 2*i:2*i+1]), self.xp.asarray(args[:, 2*i+1:2*i+2])
                 self.asdTM = asdTM
                 self.asdOMS = asdOMS
-                #self.update_params(asdTM=asdTM, asdOMS=asdOMS)
 
             PSDS[:, :, i] = self.available_functions[channel](freqs)  
 
@@ -249,7 +250,6 @@ class Psd(BaseNoise, StochasticBackgrounds):
                 2) the name of the background for the relative function
         '''
         PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
-
         # TODO: make sure the dimensions are fine
         # PSDS = self.get_PSDS(freqs) * self.xp.ones(backargs[self.back[0]].shape[0])[:, self.xp.newaxis, self.xp.newaxis]
         # if self.xp.any(self.xp.isnan(PSDS)):
@@ -286,7 +286,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
                         Shs = Shs * 10**logperturbation
                 
-                sgwbs_all += Shs * response    
+                sgwbs_all = sgwbs_all + Shs * response    
 
             PSDS = PSDS + sgwbs_all
         

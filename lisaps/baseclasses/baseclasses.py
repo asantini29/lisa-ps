@@ -86,8 +86,10 @@ class GPUobject:
     
 
 class BaseNoise(GPUobject):
-    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, Ncov=None, channels=None, use_gpu=False, units='hertz', interpkwargs=dict(kind='akima', axis=1)):
+    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, equal_arms=False, Ncov=None, channels='AET', use_gpu=False, units='hertz', interpkwargs=dict(kind='akima', axis=1)):
         GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs)
+
+        self.armlength = ARMLENGTH_EQUAL if equal_arms else ARMLENGTH_AVERAGE
 
         self.asdTM = asdTM
         self.asdOMS = asdOMS
@@ -95,26 +97,41 @@ class BaseNoise(GPUobject):
         self.fkneeOMS = fkneeOMS
         
         #channel selection
-        self.available_channels = ['AA', 'EE', 'TT']
-        available_functions = [self.get_SA, self.get_SA, self.get_ST]
+        self.available_channels = ['AA', 'EE', 'TT', 'XX', 'YY', 'ZZ', 'XY', 'XZ', 'YZ']
+        available_functions = [self.get_SA, self.get_SA, self.get_ST, self.get_SXX, self.get_SXX, self.get_SXX, self.get_SXY, self.get_SXY, self.get_SXY]
 
         self.available_functions = dict(zip(self.available_channels, available_functions))
 
-        if (Ncov is None) and (channels is None):
-            raise ValueError('Provide either the number or the name of channels to consider')
+        if channels is None:
+            if Ncov is None:
+                raise ValueError('Provide either the number or the name of channels to consider')
         
-        elif (Ncov is not None) and (channels is None):
-            self.Ncov = Ncov
-            self.channels = self.available_channels[:self.Ncov]
+            else:
+                print('Defaulting to AET configuration')
+                self.Ncov = Ncov
+                self.channels = self.available_channels[:self.Ncov]
 
-        elif (Ncov is None) and (channels is not None):
-            self.channels = channels
-            self.Ncov = len(channels)
-        
-        elif (Ncov is not None) and (channels is not None):
-            assert Ncov == len(channels)
-            self.Ncov = Ncov 
-            self.channels = channels
+        else:
+            if isinstance(channels, str):
+                assert channels in ['AET', 'XYZ'] + self.available_channels, 'Provide either the TDI setup (AET / XYZ) or a list of channels'
+                if channels == 'AET':
+                    assert Ncov in [3, 6], 'If not providing a list of channels provide the number of independent entries of the covariance matrix (3 or 6 for AET)'
+                    self.Ncov = Ncov
+                    self.channels = self.available_channels[:self.Ncov]
+
+                elif channels == 'XYZ':
+                    assert Ncov in [None, 6], 'Ncov is either not provided or set equal to 6'
+                    self.Ncov = 6
+                    self.channels = self.available_channels[-self.Ncov:]
+                
+                else: 
+                    channels = [channels]
+            
+            if isinstance(channels, list):
+                self.channels = channels
+                if Ncov is not None:
+                    assert len(channels) == Ncov
+                self.Ncov = len(channels)
 
         self.units = units
 
@@ -133,10 +150,6 @@ class BaseNoise(GPUobject):
     @asdOMS.setter
     def asdOMS(self, asdOMS=7.9e-12):
         self._asdOMS = asdOMS
-
-    def update_params(self, asdTM=2.4e-15, asdOMS=7.9e-12):
-        self.asdTM = asdTM
-        self.asdOMS = asdOMS
 
     def oms_in_isi_carrier(self, freqs):
         """
@@ -175,8 +188,25 @@ class BaseNoise(GPUobject):
         asd = self.xp.atleast_2d(self.asdOMS) # m / sqrt(Hz)
         psd_meters = asd**2 * self.xp.atleast_2d(1 + (self.fkneeOMS / freqs)**4)  # m^2 / Hz
 
-        psd_hertz = self.xp.atleast_2d(self.xp.abs((-0.5 * self.xp.exp(-2j * self.xp.pi * freqs * 1/FS) + 0.5 * self.xp.exp(2j * self.xp.pi * freqs * 1/FS)))**2 * FS**2 * (CENTRAL_FREQ / C)**2) * psd_meters
+        #psd_hertz = self.xp.atleast_2d(self.xp.abs((-0.5 * self.xp.exp(-2j * self.xp.pi * freqs * 1/FS) + 0.5 * self.xp.exp(2j * self.xp.pi * freqs * 1/FS)))**2 * FS**2 * (CENTRAL_FREQ / C)**2) * psd_meters
         
+        psd_highfreq = self.xp.atleast_2d(asd * FS * CENTRAL_FREQ / C) ** 2 * self.xp.sin(
+            2 * self.xp.pi * freqs / FS
+        ) ** 2
+        psd_lowfreq = self.xp.atleast_2d(
+            (2 * self.xp.pi * asd * CENTRAL_FREQ * self.fkneeOMS**2 / C) ** 2
+            * self.xp.abs(
+                (2 * self.xp.pi * FMIN)
+                / (
+                    1
+                    - self.xp.exp(-2 * self.xp.pi * FMIN / FS)
+                    * self.xp.exp(-2j * self.xp.pi * freqs / FS)
+                )
+            ) ** 2
+            * 1 / (FS * FMIN) ** 2
+        )
+        psd_hertz = psd_highfreq + psd_lowfreq
+
         if self.units == 'hertz':
             return self.xp.sqrt(psd_hertz) 
         
@@ -227,20 +257,63 @@ class BaseNoise(GPUobject):
             freqs (float): frequencies [Hz]
             instru (Instrument): LISA instrument object
         """
-        raise NotImplementedError
-        
+        asd = self.xp.atleast_2d(self.asdTM)
+        psd_highfreq = self.xp.atleast_2d(
+            (2 * asd * CENTRAL_FREQ / (2 * self.xp.pi * C)) ** 2
+            * self.xp.abs(
+                (2 * self.xp.pi * FMIN)
+                / (
+                    1
+                    - self.xp.exp(-2 * self.xp.pi * FMIN / FS)
+                    * self.xp.exp(-2j * self.xp.pi * freqs / FS)
+                )
+            )
+            ** 2
+            * 1
+            / (FS * FMIN) ** 2
+        )
+        psd_lowfreq = self.xp.atleast_2d(
+            (2 * asd * CENTRAL_FREQ * self.fkneeTM / (2 * self.xp.pi * C)) ** 2
+            * self.xp.abs(
+                (2 * self.xp.pi * FMIN)
+                / (
+                    1
+                    - self.xp.exp(-2 * self.xp.pi * FMIN / FS)
+                    * self.xp.exp(-2j * self.xp.pi * freqs / FS)
+                )
+            )
+            ** 2
+            * 1
+            / (FS * FMIN) ** 2
+            * self.xp.abs(1 / (1 - self.xp.exp(-2j * self.xp.pi * freqs / FS))) ** 2
+            * (2 * self.xp.pi / FS) ** 2
+        )
+        psd_hertz = psd_lowfreq + psd_highfreq
 
+        if self.units == 'hertz':
+            return self.xp.sqrt(psd_hertz) 
+        
+        elif self.units == 'meters':
+            psd_meters = psd_hertz / self.xp.atleast_2d(2 * self.xp.pi * freqs * CENTRAL_FREQ / C)**2
+            return self.xp.sqrt(psd_meters)
+        
+        elif self.units == 'strain':
+            psd_strain = psd_hertz / CENTRAL_FREQ**2
+            return self.xp.sqrt(psd_strain)
+
+        else:
+            raise ValueError('units must be `hertz`, `meters`, or `strain`')
+        
     def tdi_common(self, freqs):
-        """
-        TDI common factor.
-        
-        Args:
-            freqs (float): frequencies [Hz]
-            instru (Instrument): LISA instrument object
-        """
-        return 16 * self.xp.sin(2 * self.xp.pi * freqs * ARMLENGTH)**2 \
-            * self.xp.sin(4 * self.xp.pi * freqs * ARMLENGTH)**2
-
+        '''
+        TDI common factor for both XYZ and AET
+        '''
+        return 16 * self.xp.sin(2 * self.xp.pi * freqs * self.armlength)**2 \
+                * self.xp.sin(4 * self.xp.pi * freqs * self.armlength)
+    
+    def tdi_common_AET(self, freqs):
+        return 2 * self.tdi_common(freqs) * self.xp.sin(4 * self.xp.pi * freqs * self.armlength)
+    
     def tdi_tf_oms_A(self, freqs):
         """
         TDI transfer function for ISI OMS noise in TDI A,E.
@@ -249,7 +322,7 @@ class BaseNoise(GPUobject):
             freqs (float): frequencies [Hz]
             instru (Instrument): LISA instrument object
         """
-        psd = 2 * self.tdi_common(freqs) * (2 + self.xp.cos(2 * xp.pi * freqs * ARMLENGTH))
+        psd = self.tdi_common_AET(freqs) * (2 + self.xp.cos(2 * xp.pi * freqs * self.armlength))
         return self.xp.sqrt(self.xp.atleast_2d(psd))
         
     def tdi_tf_oms_T(self, freqs):
@@ -260,41 +333,141 @@ class BaseNoise(GPUobject):
             freqs (float): frequencies [Hz]
             instru (Instrument): LISA instrument object
         """
-        psd = 4 * self.tdi_common(freqs) * (1 - self.xp.cos(2 * self.xp.pi * freqs * ARMLENGTH))
+        psd = 2 * self.tdi_common_AET(freqs) * (1 - self.xp.cos(2 * self.xp.pi * freqs * self.armlength))
         return self.xp.sqrt(self.xp.atleast_2d(psd))
-            
+    
     def tdi_tf_testmass_A(self, freqs):
         """
-        TDI transfer function for test mass noise in TDI A,E.
-
-        Note that we remove a factor 4 wrt. the usual expression in the literature, since we included a factor 4 in the TMI expression
+        TDI transfer function for testmass noise in TDI A,E.
         
         Args:
             freqs (float): frequencies [Hz]
             instru (Instrument): LISA instrument object
         """
-        psd = 4 * self.tdi_common(freqs) * (3 + 2 * self.xp.cos(2 * self.xp.pi * freqs * ARMLENGTH) + self.xp.cos(4 * self.xp.pi * freqs * ARMLENGTH))
+        psd = self.tdi_common_AET(freqs) * (1 + self.xp.cos(2 * xp.pi * freqs * self.armlength) + self.xp.cos(2 * xp.pi * freqs * self.armlength)**2 )
+                            
         return self.xp.sqrt(self.xp.atleast_2d(psd))
-
-
+        
     def tdi_tf_testmass_T(self, freqs):
         """
-        TDI transfer function for test mass noise in TDI T.
-
-        Note that we remove a factor 4 wrt. the usual expression in the literature, since we included a factor 4 in the TMI expression
+        TDI transfer function for testmass noise in TDI T.
         
         Args:
             freqs (float): frequencies [Hz]
             instru (Instrument): LISA instrument object
         """
-        psd = 32 * self.tdi_common(freqs) * self.xp.sin(2 * self.xp.pi * freqs * ARMLENGTH / 2)**4
+        psd = self.tdi_common_AET(freqs) * (1 - self.xp.cos(2 * self.xp.pi * freqs * self.armlength))**2
+        return self.xp.sqrt(self.xp.atleast_2d(psd))
+    
+    def tdi_tf_oms_XX(self, freqs):
+        """
+        TDI transfer function for ISI OMS noise in TDI XX, YY, ZZ.
+        
+        Args:
+            freqs (float): frequencies [Hz]
+            instru (Instrument): LISA instrument object
+        """
+        psd = 4 * self.tdi_common(freqs) * self.xp.sin(4 * self.xp.pi * freqs * self.armlength)
+        return self.xp.sqrt(self.xp.atleast_2d(psd))
+    
+    def tdi_tf_oms_XY(self, freqs):
+        """
+        TDI transfer function for ISI OMS noise in TDI XY, XZ, YZ.
+        
+        Args:
+            freqs (float): frequencies [Hz]
+            instru (Instrument): LISA instrument object
+        """
+        psd = self.tdi_common(freqs) * self.xp.sin(2 * self.xp.pi * freqs * self.armlength)
+        return self.xp.sqrt(self.xp.atleast_2d(psd))
+    
+    def tdi_tf_testmass_XX(self, freqs):
+        """
+        TDI transfer function for testmass noise in TDI XX, YY, ZZ.
+        
+        Args:
+            freqs (float): frequencies [Hz]
+            instru (Instrument): LISA instrument object
+        """
+        psd = self.tdi_common(freqs) * self.xp.sin(4 * self.xp.pi * freqs * self.armlength) * (3 + self.xp.cos(4 * self.xp.pi * freqs * self.armlength))
+        return self.xp.sqrt(self.xp.atleast_2d(psd))
+    
+    def tdi_tf_testmass_XY(self, freqs):
+        """
+        TDI transfer function for testmass noise in TDI XY, XZ, YZ.
+        
+        Args:
+            freqs (float): frequencies [Hz]
+            instru (Instrument): LISA instrument object
+        """
+        psd = self.tdi_common(freqs) * self.xp.sin(2 * self.xp.pi * freqs * self.armlength)
         return self.xp.sqrt(self.xp.atleast_2d(psd))
 
+    # def tdi_common(self, freqs):
+    #     """
+    #     TDI common factor.
+        
+    #     Args:
+    #         freqs (float): frequencies [Hz]
+    #         instru (Instrument): LISA instrument object
+    #     """
+    #     return 16 * self.xp.sin(2 * self.xp.pi * freqs * self.armlength)**2 \
+    #         * self.xp.sin(4 * self.xp.pi * freqs * self.armlength)**2
+
+    # def tdi_tf_oms_A(self, freqs):
+    #     """
+    #     TDI transfer function for ISI OMS noise in TDI A,E.
+        
+    #     Args:
+    #         freqs (float): frequencies [Hz]
+    #         instru (Instrument): LISA instrument object
+    #     """
+    #     psd = 2 * self.tdi_common(freqs) * (2 + self.xp.cos(2 * xp.pi * freqs * self.armlength))
+    #     return self.xp.sqrt(self.xp.atleast_2d(psd))
+        
+    # def tdi_tf_oms_T(self, freqs):
+    #     """
+    #     TDI transfer function for ISI OMS noise in TDI T.
+        
+    #     Args:
+    #         freqs (float): frequencies [Hz]
+    #         instru (Instrument): LISA instrument object
+    #     """
+    #     psd = 4 * self.tdi_common(freqs) * (1 - self.xp.cos(2 * self.xp.pi * freqs * self.armlength))
+    #     return self.xp.sqrt(self.xp.atleast_2d(psd))
+            
+    # def tdi_tf_testmass_A(self, freqs):
+    #     """
+    #     TDI transfer function for test mass noise in TDI A,E.
+
+    #     Note that we remove a factor 4 wrt. the usual expression in the literature, since we included a factor 4 in the TMI expression
+        
+    #     Args:
+    #         freqs (float): frequencies [Hz]
+    #         instru (Instrument): LISA instrument object
+    #     """
+    #     psd = 4 * self.tdi_common(freqs) * (3 + 2 * self.xp.cos(2 * self.xp.pi * freqs * self.armlength) + self.xp.cos(4 * self.xp.pi * freqs * self.armlength))
+    #     return self.xp.sqrt(self.xp.atleast_2d(psd))
+
+
+    # def tdi_tf_testmass_T(self, freqs):
+    #     """
+    #     TDI transfer function for test mass noise in TDI T.
+
+    #     Note that we remove a factor 4 wrt. the usual expression in the literature, since we included a factor 4 in the TMI expression
+        
+    #     Args:
+    #         freqs (float): frequencies [Hz]
+    #         instru (Instrument): LISA instrument object
+    #     """
+    #     psd = 32 * self.tdi_common(freqs) * self.xp.sin(2 * self.xp.pi * freqs * self.armlength / 2)**4
+    #     return self.xp.sqrt(self.xp.atleast_2d(psd))
+    #! AET
     def testmass_A(self, freqs):
-        return self.tdi_tf_testmass_A(freqs) * self.testmass_single(freqs)
+        return self.tdi_tf_testmass_A(freqs) * self.filtered_testmass_single(freqs)
 
     def testmass_T(self, freqs):
-        return self.tdi_tf_testmass_T(freqs) * self.testmass_single(freqs)
+        return self.tdi_tf_testmass_T(freqs) * self.filtered_testmass_single(freqs)
 
     def oms_A(self, freqs):
         return self.tdi_tf_oms_A(freqs) * self.filtered_oms_in_isi_carrier(freqs)
@@ -315,6 +488,33 @@ class BaseNoise(GPUobject):
         '''
         #return xp.atleast_2d(testmass_T(asd=asdTM)**2) + xp.atleast_2d(oms_T(asd=asdOMS)*2)
         return self.testmass_T(freqs)**2 + self.oms_T(freqs)**2 
+    
+    #! XYZ
+    def testmass_XX(self, freqs):
+        return self.tdi_tf_testmass_XX(freqs) * self.filtered_testmass_single(freqs)
+
+    def testmass_XY(self, freqs):
+        return self.tdi_tf_testmass_XY(freqs) * self.filtered_testmass_single(freqs)
+
+    def oms_XX(self, freqs):
+        return self.tdi_tf_oms_XX(freqs) * self.filtered_oms_in_isi_carrier(freqs)
+
+    def oms_XY(self, freqs):
+        return self.tdi_tf_oms_XY(freqs) * self.filtered_oms_in_isi_carrier(freqs)
+
+    def get_SXX(self, freqs):
+        '''
+        noise in the XX, YY, ZZ tdi channels
+        '''
+        #return xp.atleast_2d(testmass_A(asd=asdTM)**2) + xp.atleast_2d(oms_A(asd=asdOMS)**2)
+        return self.testmass_XX(freqs)**2 + self.oms_XX(freqs)**2 
+
+    def get_SXY(self, freqs):
+        '''
+        noise in the XY, XZ, YZ tdi channels
+        '''
+        #return xp.atleast_2d(testmass_T(asd=asdTM)**2) + xp.atleast_2d(oms_T(asd=asdOMS)*2)
+        return - (self.testmass_XY(freqs)**2 + self.oms_XY(freqs)**2)
 
     def set_PSDS(self, freqs):
         '''TODO: allow specific channnels'''
