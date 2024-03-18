@@ -33,7 +33,7 @@ class GPUobject:
     def gpu_capable(self):
         return True
     
-    def adjust_interpolant(self, interpkwargs):
+    def adjust_interpolant(self, interpkwargs=None):
         '''
         Adjust here which interpolant to use
         '''
@@ -259,7 +259,7 @@ class BaseNoise(GPUobject):
         """
         asd = self.xp.atleast_2d(self.asdTM)
         psd_highfreq = self.xp.atleast_2d(
-            (2 * asd * CENTRAL_FREQ / (2 * self.xp.pi * C)) ** 2
+            (asd * CENTRAL_FREQ / (2 * self.xp.pi * C)) ** 2
             * self.xp.abs(
                 (2 * self.xp.pi * FMIN)
                 / (
@@ -273,7 +273,7 @@ class BaseNoise(GPUobject):
             / (FS * FMIN) ** 2
         )
         psd_lowfreq = self.xp.atleast_2d(
-            (2 * asd * CENTRAL_FREQ * self.fkneeTM / (2 * self.xp.pi * C)) ** 2
+            (asd * CENTRAL_FREQ * self.fkneeTM / (2 * self.xp.pi * C)) ** 2
             * self.xp.abs(
                 (2 * self.xp.pi * FMIN)
                 / (
@@ -308,11 +308,10 @@ class BaseNoise(GPUobject):
         '''
         TDI common factor for both XYZ and AET
         '''
-        return 16 * self.xp.sin(2 * self.xp.pi * freqs * self.armlength)**2 \
-                * self.xp.sin(4 * self.xp.pi * freqs * self.armlength)
+        return 16 * self.xp.sin(2 * self.xp.pi * freqs * self.armlength) * self.xp.sin(4 * self.xp.pi * freqs * self.armlength)**2
     
     def tdi_common_AET(self, freqs):
-        return 2 * self.tdi_common(freqs) * self.xp.sin(4 * self.xp.pi * freqs * self.armlength)
+        return 2 * self.tdi_common(freqs) * self.xp.sin(2 * self.xp.pi * freqs * self.armlength)
     
     def tdi_tf_oms_A(self, freqs):
         """
@@ -344,7 +343,7 @@ class BaseNoise(GPUobject):
             freqs (float): frequencies [Hz]
             instru (Instrument): LISA instrument object
         """
-        psd = self.tdi_common_AET(freqs) * (1 + self.xp.cos(2 * xp.pi * freqs * self.armlength) + self.xp.cos(2 * xp.pi * freqs * self.armlength)**2 )
+        psd = 4 * self.tdi_common_AET(freqs) * (1 + self.xp.cos(2 * xp.pi * freqs * self.armlength) + self.xp.cos(2 * xp.pi * freqs * self.armlength)**2 )
                             
         return self.xp.sqrt(self.xp.atleast_2d(psd))
         
@@ -356,7 +355,7 @@ class BaseNoise(GPUobject):
             freqs (float): frequencies [Hz]
             instru (Instrument): LISA instrument object
         """
-        psd = self.tdi_common_AET(freqs) * (1 - self.xp.cos(2 * self.xp.pi * freqs * self.armlength))**2
+        psd = 4 * self.tdi_common_AET(freqs) * (1 - self.xp.cos(2 * self.xp.pi * freqs * self.armlength))**2
         return self.xp.sqrt(self.xp.atleast_2d(psd))
     
     def tdi_tf_oms_XX(self, freqs):
@@ -367,10 +366,10 @@ class BaseNoise(GPUobject):
             freqs (float): frequencies [Hz]
             instru (Instrument): LISA instrument object
         """
-        psd = 4 * self.tdi_common(freqs) * self.xp.sin(4 * self.xp.pi * freqs * self.armlength)
+        psd = 4 * self.tdi_common(freqs) * self.xp.sin(2 * self.xp.pi * freqs * self.armlength)
         return self.xp.sqrt(self.xp.atleast_2d(psd))
     
-    def tdi_tf_oms_XY(self, freqs):
+    def tdi_tf_oms_XY2(self, freqs):
         """
         TDI transfer function for ISI OMS noise in TDI XY, XZ, YZ.
         
@@ -378,8 +377,8 @@ class BaseNoise(GPUobject):
             freqs (float): frequencies [Hz]
             instru (Instrument): LISA instrument object
         """
-        psd = self.tdi_common(freqs) * self.xp.sin(2 * self.xp.pi * freqs * self.armlength)
-        return self.xp.sqrt(self.xp.atleast_2d(psd))
+        psd = - self.tdi_common(freqs) * self.xp.sin(4 * self.xp.pi * freqs * self.armlength)
+        return self.xp.atleast_2d(psd)
     
     def tdi_tf_testmass_XX(self, freqs):
         """
@@ -389,10 +388,10 @@ class BaseNoise(GPUobject):
             freqs (float): frequencies [Hz]
             instru (Instrument): LISA instrument object
         """
-        psd = self.tdi_common(freqs) * self.xp.sin(4 * self.xp.pi * freqs * self.armlength) * (3 + self.xp.cos(4 * self.xp.pi * freqs * self.armlength))
+        psd = 4 * self.tdi_common(freqs) * self.xp.sin(2 * self.xp.pi * freqs * self.armlength) * (3 + self.xp.cos(4 * self.xp.pi * freqs * self.armlength))
         return self.xp.sqrt(self.xp.atleast_2d(psd))
     
-    def tdi_tf_testmass_XY(self, freqs):
+    def tdi_tf_testmass_XY2(self, freqs):
         """
         TDI transfer function for testmass noise in TDI XY, XZ, YZ.
         
@@ -400,8 +399,8 @@ class BaseNoise(GPUobject):
             freqs (float): frequencies [Hz]
             instru (Instrument): LISA instrument object
         """
-        psd = self.tdi_common(freqs) * self.xp.sin(2 * self.xp.pi * freqs * self.armlength)
-        return self.xp.sqrt(self.xp.atleast_2d(psd))
+        psd = - 4 * self.tdi_common(freqs) * self.xp.sin(4 * self.xp.pi * freqs * self.armlength)
+        return self.xp.atleast_2d(psd)
 
     # def tdi_common(self, freqs):
     #     """
@@ -494,13 +493,13 @@ class BaseNoise(GPUobject):
         return self.tdi_tf_testmass_XX(freqs) * self.filtered_testmass_single(freqs)
 
     def testmass_XY(self, freqs):
-        return self.tdi_tf_testmass_XY(freqs) * self.filtered_testmass_single(freqs)
+        return self.tdi_tf_testmass_XY2(freqs) * self.filtered_testmass_single(freqs)**2
 
     def oms_XX(self, freqs):
         return self.tdi_tf_oms_XX(freqs) * self.filtered_oms_in_isi_carrier(freqs)
 
     def oms_XY(self, freqs):
-        return self.tdi_tf_oms_XY(freqs) * self.filtered_oms_in_isi_carrier(freqs)
+        return self.tdi_tf_oms_XY2(freqs) * self.filtered_oms_in_isi_carrier(freqs)**2
 
     def get_SXX(self, freqs):
         '''
@@ -514,7 +513,7 @@ class BaseNoise(GPUobject):
         noise in the XY, XZ, YZ tdi channels
         '''
         #return xp.atleast_2d(testmass_T(asd=asdTM)**2) + xp.atleast_2d(oms_T(asd=asdOMS)*2)
-        return - (self.testmass_XY(freqs)**2 + self.oms_XY(freqs)**2)
+        return (self.testmass_XY(freqs) + self.oms_XY(freqs))
 
     def set_PSDS(self, freqs):
         '''TODO: allow specific channnels'''

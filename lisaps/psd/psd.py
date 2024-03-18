@@ -169,12 +169,12 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
     def prepare_interp_input_numba(self, args, groups):
         '''
-        here args is a list, probably of the fashion [ (edges), (knots) ] for all the channels.
+        here args is a list, probably of the fashion [ (edges), (knots_1), (knots_2), (knots_3) ]
         I want the output to be (knots position, knots weights)
         '''
-    
-        if args[1].shape[-1] == self.Ncov + 1:
-            edges_weights, knots_full = self.xp.asarray(args[0]), self.xp.asarray(args[1]) #always work along the `1` axis for frequency operations
+        
+        if (args[1].shape[-1] == self.Ncov + 1) or (len(args) == 2): # this means all the weights are together or there is only one spline
+            edges_weights, knots_full = self.xp.asarray(args[0]), self.xp.asarray(args[1]) #always work along the `1` axis for frequency operations # TODO may have to change this, maybe (Ncov, Nin, Nfreq) is better
             groups_knots = groups[1]           
     
             leftedge_full = edges_weights[:, 0::2]
@@ -202,6 +202,48 @@ class Psd(BaseNoise, StochasticBackgrounds):
             sortedpositions = self.xp.take_along_axis(positions, ii, axis=1)
             sortedpositions = self.xp.repeat(sortedpositions, self.Ncov, axis = -1).transpose(2,0,1)
 
+            sortedweights = self.xp.take_along_axis(weights, ii, axis=1).transpose(2,0,1)
+
+        else:
+
+            edges_weights = self.xp.asarray(args[0])
+            leftedge_full = edges_weights[:, 0::2]
+            rightedge_full = edges_weights[:, 1::2]
+            
+            args_knots = [self.xp.asarray(arg) for arg in args[1:]] #still a list
+            groups_knots = groups[1:] #still a list
+
+            groups_unique = np.unique(groups[0])
+            ngroups = groups_unique.max().item() + 1
+
+            try:
+                maxgroups = self.Nknotsmax  
+            except:
+                maxgroups = 0
+                for g in groups_knots:
+                    _, counts = np.unique(g, return_counts=True)
+                    maxgroups = counts.max().item() if counts.max().item() > maxgroups else maxgroups
+                self.Nknotsmax = maxgroups
+
+            knots_full_nans = self.xp.full((ngroups, maxgroups, 2*self.Ncov), self.xp.nan)
+            leftedge_full = self.xp.concatenate((self.xp.full((ngroups, self.Ncov), self.logfmin), leftedge_full), axis=1)[:, None, :]
+            rightedge_full = self.xp.concatenate((self.xp.full((ngroups, self.Ncov), self.logfmax), rightedge_full), axis=1)[:, None, :]
+
+            for j, (arg, group) in enumerate(zip(args_knots, groups_knots)):
+                
+                group_unique, group_count = np.unique(group, return_counts=True)
+
+                for i, g in enumerate(group_unique):
+                    knots_full_nans[i, :group_count[i], j] = arg[:, 0][group == g]
+                    knots_full_nans[i, :group_count[i], self.Ncov + j] = arg[:, 1][group == g]
+            
+            knots_full_nans = self.xp.concatenate((leftedge_full, knots_full_nans, rightedge_full), axis = 1)
+
+            positions = knots_full_nans[:,:,:self.Ncov]
+            weights = knots_full_nans[:,:,self.Ncov:]
+
+            ii = self.xp.argsort(positions, axis = 1)
+            sortedpositions = self.xp.take_along_axis(positions, ii, axis=1).transpose(2,0,1)
             sortedweights = self.xp.take_along_axis(weights, ii, axis=1).transpose(2,0,1)
 
             return sortedpositions, sortedweights

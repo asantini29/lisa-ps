@@ -261,7 +261,7 @@ class Likelihood:
         if d is None:
             d = self.d
         norm = 2
-        Xtilde = self.xp.asarray([np.fft.rfft(d[:, i] * self.window)[self.frequencymask] * np.sqrt(norm * self.dt / np.sum(self.window**2)) for i in range(self.nchannels)]).T #ALREADY NORMALIZED, refer to arXiv:2302.12573
+        Xtilde = self.xp.asarray([np.fft.rfft(d[:, i] * self.window)[self.frequencymask] for i in range(self.nchannels)]).T * np.sqrt(norm * self.dt / np.sum(self.window**2)) #ALREADY NORMALIZED, refer to arXiv:2302.12573
         return Xtilde
 
     
@@ -285,6 +285,7 @@ class Likelihood:
             dtildedtilde = dtildedtilde[:, 1:]
 
         edges = self.xp.linspace(freqs.min(), freqs.max(), Nbins + 1, endpoint=True) #edges of frequency bins
+        #edges = self.xp.logspace(np.log10(freqs.min()), np.log10(freqs.max()), Nbins + 1, endpoint=True) #edges of frequency bins
         centers = self.xp.zeros(Nbins) #centers of frequency bins
         nu = self.xp.zeros(Nbins) #effective DoFs
 
@@ -295,7 +296,7 @@ class Likelihood:
             mask = (freqs >= start) & (freqs < stop)
             centers[i] = self.xp.median(freqs[mask])
 
-            nu[i] = len(freqs[mask]) / self.Nbw
+            nu[i] = np.count_nonzero(freqs[mask]) / self.Nbw
  
             Y[:, i] = self.xp.mean(dtildedtilde[:, mask], axis = 1) * nu[i] # eq 29 in arXiv:2302.12573
 
