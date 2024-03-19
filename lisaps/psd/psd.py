@@ -246,7 +246,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
             sortedpositions = self.xp.take_along_axis(positions, ii, axis=1).transpose(2,0,1)
             sortedweights = self.xp.take_along_axis(weights, ii, axis=1).transpose(2,0,1)
 
-            return sortedpositions, sortedweights
+        return sortedpositions, sortedweights
                 
 
     def prepare_interp_input(self, args):
@@ -318,7 +318,6 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
                     if self.backgroundperturbation:
 
-                        #bknots, bweights = self.prepare_interp_input_numba(backargs[-2:], backgroups[-2:])
                         bknots, bweights = self.prepare_interp_input_numba(backargs[self.nbackgrounds+2*i:self.nbackgrounds+2*(i+1)], backgroups[self.nbackgrounds+2*i:self.nbackgrounds+2*(i+1)])
 
                         ftol_mask = self.xp.any(self.xp.abs(self.xp.diff(bknots)) < self.ftol, axis=-1)
@@ -328,9 +327,9 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
                         Shs = Shs * 10**logperturbation
                 
-                sgwbs_all = sgwbs_all + Shs * response    
+                sgwbs_all = sgwbs_all + Shs   
 
-            PSDS = PSDS + sgwbs_all
+            PSDS = PSDS + sgwbs_all * response 
         
         if self.nforegrounds > 0:
 

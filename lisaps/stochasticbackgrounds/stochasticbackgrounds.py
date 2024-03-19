@@ -22,7 +22,7 @@ class StochasticBackgrounds(GPUobject):
 
         for back in backgrounds:
             if back not in self._implemented_backgrounds:
-                raise ValueError
+                raise ValueError(str(back) + ' is not a supported background')
         
         self.backgrounds = backgrounds
         self.nbackgrounds = len(backgrounds)

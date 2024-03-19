@@ -106,7 +106,6 @@ class AkimaInterpolant():
     def __init__(self, ndim_out=2, threadsperblock = 32):
 
         # TODO: add flexibility in output shape
-        print('USING CUDA KERNEL')
 
         self.ndim_out = ndim_out
         self.threadsperblock = threadsperblock
