@@ -277,27 +277,25 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
     def __call__(self, freqs, noiseargs=[], backargs=[], foreargs=[], noisegroups=[], backgroups=[], foregroups=[], **kwargs):
         '''
-        compute the total PSD in each channel.
-        
-        Args:
-            freqs (array): array of frequencies at which the PSD is computed.
-            noiseargs (array): arguments to be passed to the noise function. The shape of the array must be ``(num positions, ndim)``.
-            backargs (dict): arguments to be passed to the background functions. 
-                The keys must be the names of the different backgrounds (see ``psd.backlist`` for a list of implemented backgrounds).
-                Entries are arrays of shape  ``(num positions, ndim)``.
-            kwargs (dict): eventual kwargs to be passed to the noise and/or background functions. It is a dictionary of dictionaries to 
-                be passed to the individual functions.
-                The keys must be:
-                1) `noise`: for the noise function;
-                2) the name of the background for the relative function
+        Compute the total PSD in each channel.
+
+        Parameters:
+        - freqs (array-like): Frequencies at which to compute the PSD.
+        - noiseargs (list, optional): Arguments for the noise function. Default is an empty list.
+        - backargs (list, optional): Arguments for the background function. Default is an empty list.
+        - foreargs (list, optional): Arguments for the foreground function. Default is an empty list.
+        - noisegroups (list, optional): Groups for the noise function. Default is an empty list.
+        - backgroups (list, optional): Groups for the background function. Default is an empty list.
+        - foregroups (list, optional): Groups for the foreground function. Default is an empty list.
+        - **kwargs (dict): Additional keyword arguments.
+
+        Returns:
+        - PSDS (array-like): The total PSD in each channel.
+
         '''
-        PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
-        # TODO: make sure the dimensions are fine
-        # PSDS = self.get_PSDS(freqs) * self.xp.ones(backargs[self.back[0]].shape[0])[:, self.xp.newaxis, self.xp.newaxis]
-        # if self.xp.any(self.xp.isnan(PSDS)):
-        #    return PSDS
         
-        # else:
+        PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
+        
         if self.nbackgrounds > 0:
 
             if not hasattr(self, 'isotropicresponse'):
