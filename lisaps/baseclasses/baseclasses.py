@@ -86,10 +86,11 @@ class GPUobject:
     
 
 class BaseNoise(GPUobject):
-    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, equal_arms=False, Ncov=None, channels='AET', use_gpu=False, units='hertz', interpkwargs=dict(kind='akima', axis=1)):
+    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, equal_arms=False, fs=None, Ncov=None, channels='AET', use_gpu=False, units='hertz', interpkwargs=dict(kind='akima', axis=1)):
         GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs)
 
         self.armlength = ARMLENGTH_EQUAL if equal_arms else ARMLENGTH_AVERAGE
+        self.fs = fs if fs is not None else FS
 
         self.asdTM = asdTM
         self.asdOMS = asdOMS
@@ -190,8 +191,8 @@ class BaseNoise(GPUobject):
 
         #psd_hertz = self.xp.atleast_2d(self.xp.abs((-0.5 * self.xp.exp(-2j * self.xp.pi * freqs * 1/FS) + 0.5 * self.xp.exp(2j * self.xp.pi * freqs * 1/FS)))**2 * FS**2 * (CENTRAL_FREQ / C)**2) * psd_meters
         
-        psd_highfreq = self.xp.atleast_2d(asd * FS * CENTRAL_FREQ / C) ** 2 * self.xp.sin(
-            2 * self.xp.pi * freqs / FS
+        psd_highfreq = self.xp.atleast_2d(asd * self.fs * CENTRAL_FREQ / C) ** 2 * self.xp.sin(
+            2 * self.xp.pi * freqs / self.fs
         ) ** 2
         psd_lowfreq = self.xp.atleast_2d(
             (2 * self.xp.pi * asd * CENTRAL_FREQ * self.fkneeOMS**2 / C) ** 2
@@ -199,11 +200,11 @@ class BaseNoise(GPUobject):
                 (2 * self.xp.pi * FMIN)
                 / (
                     1
-                    - self.xp.exp(-2 * self.xp.pi * FMIN / FS)
-                    * self.xp.exp(-2j * self.xp.pi * freqs / FS)
+                    - self.xp.exp(-2 * self.xp.pi * FMIN / self.fs)
+                    * self.xp.exp(-2j * self.xp.pi * freqs / self.fs)
                 )
             ) ** 2
-            * 1 / (FS * FMIN) ** 2
+            * 1 / (self.fs * FMIN) ** 2
         )
         psd_hertz = psd_highfreq + psd_lowfreq
 
@@ -264,13 +265,13 @@ class BaseNoise(GPUobject):
                 (2 * self.xp.pi * FMIN)
                 / (
                     1
-                    - self.xp.exp(-2 * self.xp.pi * FMIN / FS)
-                    * self.xp.exp(-2j * self.xp.pi * freqs / FS)
+                    - self.xp.exp(-2 * self.xp.pi * FMIN / self.fs)
+                    * self.xp.exp(-2j * self.xp.pi * freqs / self.fs)
                 )
             )
             ** 2
             * 1
-            / (FS * FMIN) ** 2
+            / (self.fs * FMIN) ** 2
         )
         psd_lowfreq = self.xp.atleast_2d(
             (asd * CENTRAL_FREQ * self.fkneeTM / (2 * self.xp.pi * C)) ** 2
@@ -278,15 +279,15 @@ class BaseNoise(GPUobject):
                 (2 * self.xp.pi * FMIN)
                 / (
                     1
-                    - self.xp.exp(-2 * self.xp.pi * FMIN / FS)
-                    * self.xp.exp(-2j * self.xp.pi * freqs / FS)
+                    - self.xp.exp(-2 * self.xp.pi * FMIN / self.fs)
+                    * self.xp.exp(-2j * self.xp.pi * freqs / self.fs)
                 )
             )
             ** 2
             * 1
-            / (FS * FMIN) ** 2
-            * self.xp.abs(1 / (1 - self.xp.exp(-2j * self.xp.pi * freqs / FS))) ** 2
-            * (2 * self.xp.pi / FS) ** 2
+            / (self.fs * FMIN) ** 2
+            * self.xp.abs(1 / (1 - self.xp.exp(-2j * self.xp.pi * freqs / self.fs))) ** 2
+            * (2 * self.xp.pi / self.fs) ** 2
         )
         psd_hertz = psd_lowfreq + psd_highfreq
 
@@ -402,65 +403,6 @@ class BaseNoise(GPUobject):
         psd = - 4 * self.tdi_common(freqs) * self.xp.sin(4 * self.xp.pi * freqs * self.armlength)
         return self.xp.atleast_2d(psd)
 
-    # def tdi_common(self, freqs):
-    #     """
-    #     TDI common factor.
-        
-    #     Args:
-    #         freqs (float): frequencies [Hz]
-    #         instru (Instrument): LISA instrument object
-    #     """
-    #     return 16 * self.xp.sin(2 * self.xp.pi * freqs * self.armlength)**2 \
-    #         * self.xp.sin(4 * self.xp.pi * freqs * self.armlength)**2
-
-    # def tdi_tf_oms_A(self, freqs):
-    #     """
-    #     TDI transfer function for ISI OMS noise in TDI A,E.
-        
-    #     Args:
-    #         freqs (float): frequencies [Hz]
-    #         instru (Instrument): LISA instrument object
-    #     """
-    #     psd = 2 * self.tdi_common(freqs) * (2 + self.xp.cos(2 * xp.pi * freqs * self.armlength))
-    #     return self.xp.sqrt(self.xp.atleast_2d(psd))
-        
-    # def tdi_tf_oms_T(self, freqs):
-    #     """
-    #     TDI transfer function for ISI OMS noise in TDI T.
-        
-    #     Args:
-    #         freqs (float): frequencies [Hz]
-    #         instru (Instrument): LISA instrument object
-    #     """
-    #     psd = 4 * self.tdi_common(freqs) * (1 - self.xp.cos(2 * self.xp.pi * freqs * self.armlength))
-    #     return self.xp.sqrt(self.xp.atleast_2d(psd))
-            
-    # def tdi_tf_testmass_A(self, freqs):
-    #     """
-    #     TDI transfer function for test mass noise in TDI A,E.
-
-    #     Note that we remove a factor 4 wrt. the usual expression in the literature, since we included a factor 4 in the TMI expression
-        
-    #     Args:
-    #         freqs (float): frequencies [Hz]
-    #         instru (Instrument): LISA instrument object
-    #     """
-    #     psd = 4 * self.tdi_common(freqs) * (3 + 2 * self.xp.cos(2 * self.xp.pi * freqs * self.armlength) + self.xp.cos(4 * self.xp.pi * freqs * self.armlength))
-    #     return self.xp.sqrt(self.xp.atleast_2d(psd))
-
-
-    # def tdi_tf_testmass_T(self, freqs):
-    #     """
-    #     TDI transfer function for test mass noise in TDI T.
-
-    #     Note that we remove a factor 4 wrt. the usual expression in the literature, since we included a factor 4 in the TMI expression
-        
-    #     Args:
-    #         freqs (float): frequencies [Hz]
-    #         instru (Instrument): LISA instrument object
-    #     """
-    #     psd = 32 * self.tdi_common(freqs) * self.xp.sin(2 * self.xp.pi * freqs * self.armlength / 2)**4
-    #     return self.xp.sqrt(self.xp.atleast_2d(psd))
     #! AET
     def testmass_A(self, freqs):
         return self.tdi_tf_testmass_A(freqs) * self.filtered_testmass_single(freqs)

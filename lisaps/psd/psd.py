@@ -172,7 +172,6 @@ class Psd(BaseNoise, StochasticBackgrounds):
         here args is a list, probably of the fashion [ (edges), (knots_1), (knots_2), (knots_3) ]
         I want the output to be (knots position, knots weights)
         '''
-        
         if (args[1].shape[-1] == self.Ncov + 1) or (len(args) == 2): # this means all the weights are together or there is only one spline
             edges_weights, knots_full = self.xp.asarray(args[0]), self.xp.asarray(args[1]) #always work along the `1` axis for frequency operations # TODO may have to change this, maybe (Ncov, Nin, Nfreq) is better
             groups_knots = groups[1]           
@@ -230,12 +229,22 @@ class Psd(BaseNoise, StochasticBackgrounds):
             rightedge_full = self.xp.concatenate((self.xp.full((ngroups, self.Ncov), self.logfmax), rightedge_full), axis=1)[:, None, :]
 
             for j, (arg, group) in enumerate(zip(args_knots, groups_knots)):
-                
-                group_unique, group_count = np.unique(group, return_counts=True)
+                group = self.xp.asarray(group)
+                group_unique, group_index, group_inverse, group_count = self.xp.unique(group, return_index=True, return_counts=True, return_inverse=True)
 
-                for i, g in enumerate(group_unique):
-                    knots_full_nans[i, :group_count[i], j] = arg[:, 0][group == g]
-                    knots_full_nans[i, :group_count[i], self.Ncov + j] = arg[:, 1][group == g]
+                diff_temp = self.xp.ones_like(group_inverse)
+                diff_temp[1:] = (~self.xp.diff(group_inverse).astype(bool)).astype(int)
+
+                inds_per_group = (self.xp.cumsum(diff_temp) - 1)
+                inds_group_subtract = inds_per_group[group_index][group_inverse]
+                inds_per_group = inds_per_group - inds_group_subtract
+
+                knots_full_nans[:,:, j][(group, inds_per_group)] = arg[:, 0]
+                knots_full_nans[:,:, self.Ncov + j][(group, inds_per_group)] = arg[:, 1]
+
+                # for i, g in enumerate(group_unique):
+                #     knots_full_nans[i, :group_count[i], j] = arg[:, 0][group == g]
+                #     knots_full_nans[i, :group_count[i], self.Ncov + j] = arg[:, 1][group == g]
             
             knots_full_nans = self.xp.concatenate((leftedge_full, knots_full_nans, rightedge_full), axis = 1)
 
