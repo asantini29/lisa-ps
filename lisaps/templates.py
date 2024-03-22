@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from ..baseclasses import GPUobject
+from .baseclasses import GPUobject
 import numpy as np
 try:
     import cupy as xp

@@ -1,7 +1,6 @@
-from ..baseclasses import BaseNoise, TDIresponse
-from ..stochasticbackgrounds import StochasticBackgrounds
+from .baseclasses import BaseNoise, TDIresponse
+from .stochasticbackgrounds import StochasticBackgrounds
 from typing import Any, Callable
-from time import time
 import numpy as np
 
 from cupyx.scipy.interpolate import Akima1DInterpolator as cupy_Akima1DInterpolator

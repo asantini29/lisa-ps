@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 from abc import ABC, abstractmethod, abstractproperty
 from typing import Any, Callable
-from ..baseclasses import GPUobject, TDIresponse
-from ..constants import *
+from .baseclasses import GPUobject, TDIresponse
+from .constants import *
 
 
 class StochasticBackgrounds(GPUobject):

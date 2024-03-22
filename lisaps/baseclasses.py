@@ -10,12 +10,11 @@ except (ModuleNotFoundError, ImportError):
     import numpy as xp
 
 from few.summation.interpolatedmodesum import CubicSplineInterpolant
-import scipy
 from scipy.interpolate import make_interp_spline as scipy_make_interp_spline
 from scipy.interpolate import Akima1DInterpolator as scipy_Akima1DInterpolator
 
-from ..constants import *
-from ..interpolation.akima import AkimaInterpolant
+from .constants import *
+from .akima import AkimaInterpolant
 
 
 class GPUobject:
