@@ -232,6 +232,15 @@ class Likelihood:
         self.indeces = [self.idx_wf, self.idx_noise, self.idx_background, self.idx_foreground]
         
     def unpack_args(self, args):
+        """
+        Unpacks the arguments into separate components.
+
+        Args:
+            args (list): The list of arguments to be unpacked.
+
+        Returns:
+            tuple: A tuple containing the unpacked components: wf_args, noise_args, background_args, foreground_args.
+        """
         wf_args, noise_args, background_args, foreground_args = [], [], [], []
         components = [wf_args, noise_args, background_args, foreground_args]
         indeces = self.indeces + [len(args)]

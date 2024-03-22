@@ -14,8 +14,5 @@ from .lisaps import __version__
 from .lisaps import __author__
 from .lisaps import __author_email__
 
-from .likelihood import *
-from .psd import *
-from .stochasticbackgrounds import *
-from .constants import *
-from .baseclasses import *
+
+from . import akima, baseclasses, constants, likelihood, psd, stochasticbackgrounds, templates
