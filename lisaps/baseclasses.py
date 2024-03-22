@@ -19,8 +19,19 @@ from .akima import AkimaInterpolant
 
 class GPUobject:
     '''
-    Object which can be run on GPUs
+    Represents an object that can utilize a GPU for computations.
+
+    Attributes:
+        use_gpu (bool): Flag indicating whether to use GPU for computations.
+        xp: The library to use for computations (numpy or cupy).
+        interpkwargs (dict): Dictionary containing the arguments for the spine interpolant.
+
+    Methods:
+        __init__(self, use_gpu=False, interpkwargs=None): Initializes a GPUobject instance.
+        gpu_capable(self): Returns True if the object is capable of using a GPU.
+        adjust_interpolant(self, interpkwargs=None): Adjusts the interpolant to use for computations.
     '''
+
     def __init__(self, use_gpu=False, interpkwargs=None):
         self.use_gpu = use_gpu
         self.xp = xp if use_gpu else np
@@ -34,7 +45,14 @@ class GPUobject:
     
     def adjust_interpolant(self, interpkwargs=None):
         '''
-        Adjust here which interpolant to use
+        Adjusts the interpolant to use for computations.
+
+        Args:
+            interpkwargs (dict): Dictionary containing the arguments for the spine interpolant.
+
+        Raises:
+            AssertionError: If interpkwargs is not a dictionary.
+
         '''
         if interpkwargs is None:
             self.interpkwargs = dict(
@@ -85,6 +103,47 @@ class GPUobject:
     
 
 class BaseNoise(GPUobject):
+    """
+    Base class for modeling noise in a LISA.
+
+    Args:
+        asdTM (float): Amplitude spectral density of test mass noise [m/s^2/sqrt(Hz)].
+        asdOMS (float): Amplitude spectral density of optical metrology system noise [m/sqrt(Hz)].
+        fkneeTM (float): Test mass noise knee frequency [Hz].
+        fkneeOMS (float): Optical metrology system noise knee frequency [Hz].
+        equal_arms (bool): Flag indicating whether the detector has equal arm lengths.
+        fs (float): Sampling frequency [Hz].
+        Ncov (int): Number of channels to consider.
+        channels (str or list): Channels to consider. Can be 'AET', 'XYZ', or a list of channel names.
+        use_gpu (bool): Flag indicating whether to use GPU acceleration.
+        units (str): Units of the noise PSD. Can be 'hertz', 'meters', or 'strain'.
+        interpkwargs (dict): Keyword arguments for interpolation.
+
+    Attributes:
+        armlength (float): Length of the detector arms.
+        fs (float): Sampling frequency.
+        asdTM (float): Amplitude spectral density of test mass noise.
+        asdOMS (float): Amplitude spectral density of optical metrology system noise.
+        fkneeTM (float): Test mass noise knee frequency.
+        fkneeOMS (float): Optical metrology system noise knee frequency.
+        available_channels (list): List of available channel names.
+        available_functions (dict): Dictionary mapping channel names to corresponding functions.
+        Ncov (int): Number of channels to consider.
+        channels (list): List of channel names to consider.
+        TDIsetup (str): TDI setup configuration.
+        units (str): Units of the noise PSD.
+
+    Methods:
+        oms_in_isi_carrier(freqs): Model for OMS noise PSD in ISI carrier beatnote fluctuations.
+        filtered_oms_in_isi_carrier(freqs): Model for OMS noise PSD in ISI carrier beatnote fluctuations with filtered transfer function.
+        testmass_single(freqs): Model for single test mass noise PSD including filters used in the data generation.
+        filtered_testmass_single(freqs): Model for single test mass noise PSD with filtered transfer function.
+        tdi_common(freqs): TDI common factor for both XYZ and AET configurations.
+        tdi_common_AET(freqs): TDI common factor for AET configuration.
+        tdi_tf_oms_A(freqs): TDI transfer function for ISI OMS noise in TDI A,E.
+        tdi_tf_oms_T(freqs): TDI transfer function for ISI OMS noise in TDI T.
+    """
+
     def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, equal_arms=False, fs=None, Ncov=None, channels='AET', use_gpu=False, units='hertz', interpkwargs=dict(kind='akima', axis=1)):
         GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs)
 
@@ -466,10 +525,8 @@ class BaseNoise(GPUobject):
         return (self.testmass_XY(freqs) + self.oms_XY(freqs))
 
     def set_PSDS(self, freqs):
-        '''TODO: allow specific channnels'''
-        self.PSDS_design = (self.xp.asarray([self.available_functions[channel](freqs) for channel in self.channels])).transpose(1,2,0)
 
-        #self.PSDS_design = (self.xp.asarray([self.get_SA(freqs)[0], self.get_SA(freqs)[0], self.get_ST(freqs)[0]]).T)[self.xp.newaxis, : , :]
+        self.PSDS_design = (self.xp.asarray([self.available_functions[channel](freqs) for channel in self.channels])).transpose(1,2,0)
 
     def get_PSDS(self, freqs=None, overwrite=False, **kwargs):
         if (self.PSDS_design is None):
@@ -485,35 +542,53 @@ class BaseNoise(GPUobject):
     
 
 class TDIresponse(GPUobject):
-        '''
-        Compute a spline interpolant for the TDI response in the A, E, T channels. Points used for the interpolation comes from the
-        Mathematica notebook.
-        The file must contain the frequencies used to compute the transfer functions and the latter for A, E, T in this exact order.
-        The class supports both CPUs and GPUs.
-        '''
-        def __init__(self, filename, use_gpu=False, interpkwargs=dict(kind='akima', axis=0)):
+    """
+    Represents the response of a TDI (Time Delay Interferometry) system.
+    
+    Args:
+        filename (str): The path to the file containing TDI response data.
+        use_gpu (bool, optional): Flag indicating whether to use GPU acceleration. Default: `False`.
+        interpkwargs (dict, optional): Additional keyword arguments for the interpolation function. Defaults to dict(kind='akima', axis=0).
+    """
 
-            GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs)
+    def __init__(self, filename, use_gpu=False, interpkwargs=dict(kind='akima', axis=0)):
+        """
+        Initializes a TDIresponse object.
+        
+        Args:
+            filename (str): The path to the file containing TDI response data.
+            use_gpu (bool, optional): Flag indicating whether to use GPU acceleration. Default: `False`.
+            interpkwargs (dict, optional): Additional keyword arguments for the interpolation function. Default: dict(kind='akima', axis=0).
+        """
+        GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs)
 
-            TDIcsd_all = self.xp.transpose( self.xp.genfromtxt(filename, delimiter=','))
+        TDIcsd_all = self.xp.transpose(self.xp.genfromtxt(filename, delimiter=','))
 
-            self.freqs = self.xp.real(TDIcsd_all[0])
-            
-            self.tfs_real = self.xp.stack(( self.xp.real(TDIcsd_all[i]) for i in range(1, len(TDIcsd_all)) )).T
-            self.tfs_imag = self.xp.stack(( self.xp.imag(TDIcsd_all[i]) for i in range(1, len(TDIcsd_all)) )).T
+        self.freqs = self.xp.real(TDIcsd_all[0])
 
-            self.TDIinterpolant_real = self.interp(self.freqs, self.tfs_real)
-            self.TDIinterpolant_imag = self.interp(self.freqs, self.tfs_imag)
+        self.tfs_real = self.xp.stack((self.xp.real(TDIcsd_all[i]) for i in range(1, len(TDIcsd_all)))).T
+        self.tfs_imag = self.xp.stack((self.xp.imag(TDIcsd_all[i]) for i in range(1, len(TDIcsd_all)))).T
 
-        def __call__(self, freqs, return_gpu=True):
-            
-            response_real = self.TDIinterpolant_real(freqs)
-            response_imag = self.TDIinterpolant_imag(freqs)
+        self.TDIinterpolant_real = self.interp(self.freqs, self.tfs_real)
+        self.TDIinterpolant_imag = self.interp(self.freqs, self.tfs_imag)
 
-            response = response_real + 1j * response_imag
+    def __call__(self, freqs, return_gpu=True):
+        """
+        Calculates the TDI response at the given frequencies.
+        
+        Args:
+            freqs (array-like): The frequencies at which to calculate the TDI response.
+            return_gpu (bool, optional): Flag indicating whether to return the response as a GPU array. Default: `True`.
+        
+        Returns:
+            array-like: The TDI response at the given frequencies.
+        """
+        response_real = self.TDIinterpolant_real(freqs)
+        response_imag = self.TDIinterpolant_imag(freqs)
 
-            if not return_gpu:
-                return response.get() #return a numpy array
+        response = response_real + 1j * response_imag
 
-            else:
-                return response #return a self.xp array
+        if not return_gpu:
+            return response.get()  # return a numpy array
+        else:
+            return response  # return a self.xp array
