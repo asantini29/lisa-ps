@@ -119,6 +119,7 @@ class AkimaInterpolant():
     def __call__(self, x_new, x, y, **kwargs):
 
         ngroups = x.shape[-1]
+        shape_out = x.shape[:-1] + x_new.shape
 
         x = x.reshape(-1, ngroups, order='C')
         y = y.reshape(-1, ngroups, order='C')
@@ -138,4 +139,4 @@ class AkimaInterpolant():
 
         self.evaluate[grid, self.threadsperblock](x_new, x_flat, y_flat, nin, ngroups, nnans, result)
 
-        return result.reshape(nin, nf)
+        return result.reshape(shape_out, order='C')

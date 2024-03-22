@@ -45,7 +45,17 @@ class Psd(BaseNoise, StochasticBackgrounds):
         if not isinstance(foregrounds, list):
             foregrounds = [foregrounds]
 
-        StochasticBackgrounds.__init__(self, backgrounds=backgrounds, background_kwargs=background_kwargs, foregrounds=foregrounds, foreground_kwargs=foreground_kwargs, isotropicresponse=isotropicresponse, GBresponse=GBresponse, channels=self.channels, units=units, use_gpu=use_gpu)
+        StochasticBackgrounds.__init__(self, 
+                                       backgrounds=backgrounds, 
+                                       background_kwargs=background_kwargs, 
+                                       foregrounds=foregrounds, 
+                                       foreground_kwargs=foreground_kwargs, 
+                                       TDIsetup=self.TDIsetup,
+                                       isotropicresponse=isotropicresponse, 
+                                       GBresponse=GBresponse, 
+                                       channels=self.channels, 
+                                       units=units, 
+                                       use_gpu=use_gpu)
 
         self.PSDS_design = None
 
@@ -163,7 +173,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
         '''
         logperturbation = self.interp(self.xp.log10(freqs), knots, weights)
 
-        return logperturbation.reshape(self.Ncov, -1, freqs.shape[0]).transpose(1, 2, 0)
+        return logperturbation.transpose(1, 2, 0)
     
 
     def prepare_interp_input_numba(self, args, groups):
@@ -301,7 +311,6 @@ class Psd(BaseNoise, StochasticBackgrounds):
         - PSDS (array-like): The total PSD in each channel.
 
         '''
-        
         PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
         
         if self.nbackgrounds > 0:

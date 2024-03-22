@@ -110,28 +110,37 @@ class BaseNoise(GPUobject):
                 print('Defaulting to AET configuration')
                 self.Ncov = Ncov
                 self.channels = self.available_channels[:self.Ncov]
+                self.TDIsetup = 'AET'
 
         else:
             if isinstance(channels, str):
                 assert channels in ['AET', 'XYZ'] + self.available_channels, 'Provide either the TDI setup (AET / XYZ) or a list of channels'
                 if channels == 'AET':
-                    assert Ncov in [3, 6], 'If not providing a list of channels provide the number of independent entries of the covariance matrix (3 or 6 for AET)'
-                    self.Ncov = Ncov
+                    assert Ncov in [None, 3], 'Ncov is either not provided or set equal to 3'
+                    self.Ncov = 3
                     self.channels = self.available_channels[:self.Ncov]
+
+                    self.TDIsetup = 'AET'
 
                 elif channels == 'XYZ':
                     assert Ncov in [None, 6], 'Ncov is either not provided or set equal to 6'
                     self.Ncov = 6
                     self.channels = self.available_channels[-self.Ncov:]
+
+                    self.TDIsetup = 'XYZ'
                 
+                #* single channels can be selected only with AET configuration
                 else: 
                     channels = [channels]
+                    self.TDIsetup = 'AET'
             
             if isinstance(channels, list):
                 self.channels = channels
                 if Ncov is not None:
                     assert len(channels) == Ncov
                 self.Ncov = len(channels)
+
+                self.TDIsetup = 'AET'
 
         self.units = units
 
@@ -486,20 +495,22 @@ class TDIresponse(GPUobject):
 
             GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs)
 
-            TDIcsd_re = self.xp.transpose( self.xp.genfromtxt(filename, delimiter=','))
-            self.freqs = TDIcsd_re[0]
-            # psd A,E and T
-            self.tf_A = TDIcsd_re[1]
-            self.tf_E = TDIcsd_re[2]
-            self.tf_T = TDIcsd_re[3]
-            
-            self.tfs = self.xp.stack((self.tf_A, self.tf_E, self.tf_T)).T
+            TDIcsd_all = self.xp.transpose( self.xp.genfromtxt(filename, delimiter=','))
 
-            self.TDIinterpolant = self.interp(self.freqs, self.tfs)
+            self.freqs = self.xp.real(TDIcsd_all[0])
+            
+            self.tfs_real = self.xp.stack(( self.xp.real(TDIcsd_all[i]) for i in range(1, len(TDIcsd_all)) )).T
+            self.tfs_imag = self.xp.stack(( self.xp.imag(TDIcsd_all[i]) for i in range(1, len(TDIcsd_all)) )).T
+
+            self.TDIinterpolant_real = self.interp(self.freqs, self.tfs_real)
+            self.TDIinterpolant_imag = self.interp(self.freqs, self.tfs_imag)
 
         def __call__(self, freqs, return_gpu=True):
             
-            response = self.TDIinterpolant(freqs)
+            response_real = self.TDIinterpolant_real(freqs)
+            response_imag = self.TDIinterpolant_imag(freqs)
+
+            response = response_real + 1j * response_imag
 
             if not return_gpu:
                 return response.get() #return a numpy array

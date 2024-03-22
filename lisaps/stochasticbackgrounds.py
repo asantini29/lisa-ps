@@ -7,7 +7,7 @@ from .constants import *
 
 class StochasticBackgrounds(GPUobject):
 
-    def __init__(self, backgrounds=[], background_kwargs={}, foregrounds=[], foreground_kwargs={}, use_gpu=False, isotropicresponse=None, GBresponse=None, channels=None, units='hertz', **kwargs):
+    def __init__(self, backgrounds=[], background_kwargs={}, foregrounds=[], foreground_kwargs={}, use_gpu=False, TDIsetup='AET', isotropicresponse=None, GBresponse=None, channels=None, units='hertz', **kwargs):
 
         GPUobject.__init__(self, use_gpu=use_gpu)
 
@@ -27,8 +27,8 @@ class StochasticBackgrounds(GPUobject):
         self.backgrounds = backgrounds
         self.nbackgrounds = len(backgrounds)
 
+        self.TDIsetup = TDIsetup
         self.isotropicresponse_interp = self.set_responseinterp(isotropicresponse)
-        #ƒself.isotropicresponse = self.set_isotropicresponse(freqs=freqs)
 
         if not isinstance(foregrounds, list):
                 foregrounds = [foregrounds]
@@ -106,6 +106,17 @@ class StochasticBackgrounds(GPUobject):
         }
     
     def set_responseinterp(self, response):
+
+        if response is None: #use default files
+            TFdir = '/data/asantini/packages/lisa-ps/utils/'
+
+            if self.TDIsetup == 'AET':
+                response = TFdir + 'TDItransferfunction_AET.csv'
+            elif self.TDIsetup == 'XYZ':
+                response = TFdir + 'TDItransferfunction_XYZ.csv'
+
+            else:
+                raise ValueError('TDIsetup not recognized. Choose between AET and XYZ')
 
         if isinstance(response, str):
             responseinterp = TDIresponse(filename=response, use_gpu=self.use_gpu)
