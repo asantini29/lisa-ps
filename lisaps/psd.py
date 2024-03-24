@@ -267,7 +267,11 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
             ii = self.xp.argsort(positions, axis = 1)
             sortedpositions = self.xp.take_along_axis(positions, ii, axis=1)
-            sortedpositions = self.xp.repeat(sortedpositions, self.Ncov, axis = -1).transpose(2,0,1)
+
+            if (args[1].shape[-1] == self.Ncov + 1):
+                sortedpositions = self.xp.repeat(sortedpositions, self.Ncov, axis = -1).transpose(2,0,1)
+            else:
+                sortedpositions = sortedpositions.transpose(2,0,1)
 
             sortedweights = self.xp.take_along_axis(weights, ii, axis=1).transpose(2,0,1)
 
@@ -380,10 +384,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
                 
                 if len(backargs[i]) > 0:
                     back = self.backgrounds[i]
-                    h2omega = self.backgrounds_fn[i](freqs, backargs[i], **kwargs[back])
-                    Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
-
-                    Shs = self.xp.array(Sh).transpose(1, 2, 0)            
+                    h2omega = self.backgrounds_fn[i](freqs, backargs[i], **kwargs[back])            
 
                     if self.backgroundperturbation:
 
@@ -394,7 +395,12 @@ class Psd(BaseNoise, StochasticBackgrounds):
                         
                         logperturbation = self.logperturbation_numba(freqs=freqs, knots=bknots, weights=bweights)
 
-                        Shs = Shs * 10**logperturbation
+                        h2omega = h2omega[:,:,None] * 10**logperturbation
+
+                    h2omega = self.xp.repeat(h2omega, self.Ncov, axis=-1)
+                    Shs = self.convert_to_psd(freqs, h2omega)
+                    #Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
+                    #Shs = self.xp.array(Sh).transpose(1, 2, 0)
                 
                 sgwbs_all = sgwbs_all + Shs   
 

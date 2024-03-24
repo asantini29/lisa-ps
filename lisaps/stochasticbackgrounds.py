@@ -61,7 +61,7 @@ class StochasticBackgrounds(GPUobject):
 
     def convert_to_psd(self, freqs, h2omega):
         
-        Sh = h2omega * (3 * H0h**2 / (4 * self.xp.pi**2 * freqs**3)) * (2 * self.xp.pi) #strain units
+        Sh = h2omega * (3 * H0h**2 / (4 * self.xp.pi**2 * freqs[None, :, None]**3)) * (2 * self.xp.pi) #strain units
         if not hasattr(self, '_conversion'):
             self.conversion = freqs
         return Sh * self.conversion
