@@ -103,7 +103,7 @@ def akima_spline_kernel2D(x_new, x, y, n_in, ngroups, nnans, result):
 
 
 class AkimaInterpolant():
-    def __init__(self, ndim_out=2, threadsperblock = 32):
+    def __init__(self, ndim_out=2, threadsperblock = 64):
 
         # TODO: add flexibility in output shape
 
@@ -136,7 +136,13 @@ class AkimaInterpolant():
         grid = (blockspergrid, num_sets, 1)
 
         result = self.xp.zeros(nin * nf)
+        #result_cuda = cuda.as_cuda_array(result)
 
         self.evaluate[grid, self.threadsperblock](x_new, x_flat, y_flat, nin, ngroups, nnans, result)
+
+        mempool = xp.get_default_memory_pool()
+        mempool.free_all_blocks()
+
+        #result = self.xp.asarray(result_cuda)
 
         return result.reshape(shape_out, order='C')

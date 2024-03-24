@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 from .baseclasses import BaseNoise, TDIresponse
 from .stochasticbackgrounds import StochasticBackgrounds
 from typing import Any, Callable
@@ -8,7 +10,50 @@ from cupyx.scipy.interpolate import Akima1DInterpolator as cupy_Akima1DInterpola
 import warnings
 
 class Psd(BaseNoise, StochasticBackgrounds):
+    """
+    Psd class represents the power spectral density (PSD) model for noise and stochastic backgrounds.
 
+    Args:
+        asdTM (float): Amplitude spectral density (ASD) for TM channel. Default is 2.4e-15.
+        asdOMS (float): ASD for OMS channel. Default is 7.9e-12.
+        fmin (float): Minimum frequency. Default is 1e-4.
+        fmax (float): Maximum frequency. Default is 2.5e-2.
+        freqs (array-like): Frequencies at which the PSDs are evaluated. Default is None.
+        equal_arms (bool): Flag indicating whether the arms have equal lengths. Default is False.
+        Ncov (int): Number of covariance matrices. Default is None.
+        channels (list): List of channel names. Default is None.
+        use_gpu (bool): Flag indicating whether to use GPU. Default is False.
+        units (str): Frequency units. Default is 'hertz'.
+        noiseless (bool): Flag indicating whether to consider noiseless case. Default is False.
+        splineperturbation (dict): Dictionary containing spline perturbation information. Default is {}.
+        interpkwargs (dict): Additional keyword arguments for interpolation. Default is None.
+        fitASDs (bool): Flag indicating whether to fit for ASDs. Default is False.
+        backgrounds (list): List of background models. Default is [].
+        background_kwargs (dict): Additional keyword arguments for background models. Default is {}.
+        foregrounds (list): List of foreground models. Default is [].
+        foreground_kwargs (dict): Additional keyword arguments for foreground models. Default is {}.
+        isotropicresponse (None): Isotropic response. Default is None.
+        GBresponse (None): GB response. Default is None.
+        ftol (float): Tolerance for spline interpolation. Default is 0.1.
+        **kwargs: Additional keyword arguments.
+
+    Attributes:
+        PSDS_design (None): Design PSDs.
+        logfmin (float): Logarithm of the minimum frequency.
+        logfmax (float): Logarithm of the maximum frequency.
+        noiseperturbation (dict): Dictionary containing noise perturbation information.
+        backgroundperturbation (dict): Dictionary containing background perturbation information.
+        fitASDs (bool): Flag indicating whether to fit for ASDs.
+        ftol (float): Tolerance for spline interpolation.
+
+    Methods:
+        set_noisefn: Sets the noise function based on the perturbation type.
+        constmod: Applies constant modification to the input PSDs.
+        splinemod: Applies spline modification to the input PSDs.
+        logperturbation: Calculates the spline perturbation in logarithmic space.
+        logperturbation_numba: Calculates the spline perturbation using a numba cuda kernel.
+        prepare_interp_input_numba: Prepares the input for spline interpolation using a numba cuda kernel.
+    """
     def __init__(self, 
                  asdTM=2.4e-15, 
                  asdOMS=7.9e-12, 
@@ -113,13 +158,21 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
         return PSDS
     
-
     def splinemod(self, freqs, args, groups, knots=None, **kwargs):
         '''
-        args -> spline 
-        ASDs -> TM and OMS ASDs, shape: (n_in, 2)
+        Applies spline modification to the input power spectral densities (PSDs).
+
+        Parameters:
+        - freqs (array-like): Frequencies at which the PSDs are evaluated.
+        - args (array-like or list): Arguments of the PSDs evaluation. if `self.fitASDs` is True the first argument is the ASDs, while the rest are the spline coefficients. 
+        - groups (array-like or list): Group indices for the ASDs and the spline coefficients.
+        - knots (array-like, optional): Knots for the spline interpolation. If not provided, use reversible jump.
+        - **kwargs: Additional keyword arguments.
+
+        Returns:
+        - PSDS (ndarray): Modified PSDs with shape (n_in, len(freqs), Ncov).
         '''
-        #breakpoint()
+        
         if self.fitASDs:
             self.PSDS_design = self.constmod(freqs, args[:1])    
             args = args[1:]  
@@ -135,8 +188,6 @@ class Psd(BaseNoise, StochasticBackgrounds):
         if not isinstance(groups, list):
             groups = [groups]
             
-        #splinepert = cupy_Akima1DInterpolator(x=self.xp.array([-4., -3.6, -3.1, -2.2, np.log10(2.5e-2)]), y=self.xp.array([0.0, -0.2, 0.3, -0.7, 0.0]))
-
         nin = min([arg.shape[0] for arg in args])
         PSDS = self.xp.empty((nin, len(freqs), self.Ncov))
 
@@ -166,7 +217,6 @@ class Psd(BaseNoise, StochasticBackgrounds):
         
         return logperturbation
     
-
     def logperturbation_numba(self, freqs, knots, weights):
         '''
         Spline perturbation with numba cuda kernel.
@@ -175,12 +225,12 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
         return logperturbation.transpose(1, 2, 0)
     
-
     def prepare_interp_input_numba(self, args, groups):
         '''
-        here args is a list, probably of the fashion [ (edges), (knots_1), (knots_2), (knots_3) ]
+        here args is a list of the fashion [ (edges), (knots_i) ]
         I want the output to be (knots position, knots weights)
         '''
+
         if (args[1].shape[-1] == self.Ncov + 1) or (len(args) == 2): # this means all the weights are together or there is only one spline
             edges_weights, knots_full = self.xp.asarray(args[0]), self.xp.asarray(args[1]) #always work along the `1` axis for frequency operations # TODO may have to change this, maybe (Ncov, Nin, Nfreq) is better
             groups_knots = groups[1]           
@@ -188,21 +238,30 @@ class Psd(BaseNoise, StochasticBackgrounds):
             leftedge_full = edges_weights[:, 0::2]
             rightedge_full = edges_weights[:, 1::2]
 
-            groups_unique, groups_count = np.unique(groups_knots, return_counts=True)
-            ngroups = groups_unique.max().item() + 1
-            maxgroups = groups_count.max().item()
+            group_unique, group_index, group_inverse, group_count = self.xp.unique(groups_knots, return_index=True, return_counts=True, return_inverse=True)
+
+            diff_temp = self.xp.ones_like(group_inverse)
+            diff_temp[1:] = (~self.xp.diff(group_inverse).astype(bool)).astype(int)
+
+            inds_per_group = (self.xp.cumsum(diff_temp) - 1)
+            inds_group_subtract = inds_per_group[group_index][group_inverse]
+            inds_per_group = inds_per_group - inds_group_subtract
+
+            ngroups = group_unique.max().item() + 1
+            maxgroups = group_count.max().item()
 
             knots_full_nans = self.xp.full((ngroups, maxgroups, knots_full.shape[-1]), self.xp.nan)
             #breakpoint()
             leftedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmin), leftedge_full), axis=1)[:, None, :]
             rightedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmax), rightedge_full), axis=1)[:, None, :]
 
-            for i, g in enumerate(groups_unique):
-                #breakpoint()
-                knots_full_nans[i, :groups_count[i]] = knots_full[groups_knots == g]
+            knots_full_nans[(groups_knots, inds_per_group)] = knots_full
+            # for i, g in enumerate(groups_unique):
+            #     #breakpoint()
+            #     knots_full_nans[i, :groups_count[i]] = knots_full[groups_knots == g]
 
             knots_full_nans = self.xp.concatenate((leftedge_full, knots_full_nans, rightedge_full), axis = 1)
-            
+
             positions = knots_full_nans[:,:,:1]
             weights = knots_full_nans[:,:,1:]
 
@@ -213,11 +272,10 @@ class Psd(BaseNoise, StochasticBackgrounds):
             sortedweights = self.xp.take_along_axis(weights, ii, axis=1).transpose(2,0,1)
 
         else:
-
             edges_weights = self.xp.asarray(args[0])
             leftedge_full = edges_weights[:, 0::2]
             rightedge_full = edges_weights[:, 1::2]
-            
+
             args_knots = [self.xp.asarray(arg) for arg in args[1:]] #still a list
             groups_knots = groups[1:] #still a list
 
@@ -251,10 +309,6 @@ class Psd(BaseNoise, StochasticBackgrounds):
                 knots_full_nans[:,:, j][(group, inds_per_group)] = arg[:, 0]
                 knots_full_nans[:,:, self.Ncov + j][(group, inds_per_group)] = arg[:, 1]
 
-                # for i, g in enumerate(group_unique):
-                #     knots_full_nans[i, :group_count[i], j] = arg[:, 0][group == g]
-                #     knots_full_nans[i, :group_count[i], self.Ncov + j] = arg[:, 1][group == g]
-            
             knots_full_nans = self.xp.concatenate((leftedge_full, knots_full_nans, rightedge_full), axis = 1)
 
             positions = knots_full_nans[:,:,:self.Ncov]
@@ -292,7 +346,6 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
             return knots, weights
 
-
     def __call__(self, freqs, noiseargs=[], backargs=[], foreargs=[], noisegroups=[], backgroups=[], foregroups=[], **kwargs):
         '''
         Compute the total PSD in each channel.
@@ -314,10 +367,13 @@ class Psd(BaseNoise, StochasticBackgrounds):
         PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
         
         if self.nbackgrounds > 0:
-
-            if not hasattr(self, 'isotropicresponse'):
-                self.set_isotropicresponse(freqs)
             
+            try:
+                response = self.isotropicresponse[self.xp.newaxis, :, :]
+            except:
+                self.set_isotropicresponse(freqs)
+                response = self.isotropicresponse[self.xp.newaxis, :, :]
+
             sgwbs_all = self.xp.zeros_like(PSDS)
 
             for i in range(self.nbackgrounds):
@@ -327,9 +383,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
                     h2omega = self.backgrounds_fn[i](freqs, backargs[i], **kwargs[back])
                     Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
 
-                    Shs = self.xp.array(Sh).transpose(1, 2, 0)
-
-                    response = self.isotropicresponse[self.xp.newaxis, :, :]            
+                    Shs = self.xp.array(Sh).transpose(1, 2, 0)            
 
                     if self.backgroundperturbation:
 

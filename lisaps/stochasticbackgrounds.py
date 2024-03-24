@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod, abstractproperty
 from typing import Any, Callable
 from .baseclasses import GPUobject, TDIresponse
 from .constants import *
+import numpy as np
 
 
 class StochasticBackgrounds(GPUobject):

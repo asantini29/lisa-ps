@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-
+from pysco import performance
 import numpy as np
 from scipy import signal
 try:
@@ -127,6 +127,8 @@ class Likelihood:
         -) add response for individual sources
 
         #* The order that `args` has to follow is [(templates), (noise), (backgrounds), (foregrounds)]
+
+        
         '''
 
         if not isinstance(args, list):
@@ -143,18 +145,16 @@ class Likelihood:
 
         wf_args_all, noise_args_all, background_args_all, foreground_args_all = self.unpack_args(args)
         wf_groups_all, noise_groups_all, background_groups_all, foreground_groups_all = self.unpack_groups(groups)
-        
+
         logl_all = []
-        
-        #breakpoint()
 
         subset = int(ngroups / self.nsubset) if ngroups > self.nsubset else ngroups
-        
+
         try:
-            inds_all = np.arange(0, ngroups+1, subset)
+            inds_all = np.arange(0, ngroups + 1, subset)
         except:
             breakpoint()
-        
+
         if inds_all[-1] < ngroups:
             inds_all = np.concatenate([inds_all, np.array([ngroups])])
 
@@ -164,7 +164,6 @@ class Likelihood:
             wf_groups, noise_groups, background_groups, foreground_groups = [], [], [], []
 
             for j in range(self.nsource_wf_gen):
-                #inds = np.where((groups[j] >= inds_all[i]) & (groups[j] < inds_all[i + 1]))
                 inds = np.where((wf_groups_all[j] >= inds_all[i]) & (wf_groups_all[j] < inds_all[i + 1]))
                 wf_args += [wf_args_all[j][inds]]
                 wf_groups += [wf_groups_all[j][inds]]
@@ -178,16 +177,16 @@ class Likelihood:
                 inds = np.where((background_groups_all[j] >= inds_all[i]) & (background_groups_all[j] < inds_all[i + 1]))
                 background_args += [background_args_all[j][inds]]
                 background_groups += [background_groups_all[j][inds]]
-            
+
             for j in range(len(self.foregroundkeys)):
                 inds = np.where((foreground_groups_all[j] >= inds_all[i]) & (foreground_groups_all[j] < inds_all[i + 1]))
                 foreground_args += [foreground_args_all[j][inds]]
                 foreground_groups += [foreground_groups_all[j][inds]]
-        
-            psd = self.compute_psd(self.freqs, 
-                                   noise_args, 
-                                   background_args, 
-                                   foreground_args, 
+
+            psd = self.compute_psd(self.freqs,
+                                   noise_args,
+                                   background_args,
+                                   foreground_args,
                                    noise_groups,
                                    background_groups,
                                    foreground_groups,
@@ -197,7 +196,7 @@ class Likelihood:
                 h = self.xp.zeros(shape=(self.freqs[0]))
 
                 for source, wf_args_i in zip(self.source_wf_gen, wf_args):
-                        
+
                     h += source(wf_args_i)
 
                 n = self.d - h
@@ -211,10 +210,10 @@ class Likelihood:
             mempool.free_all_blocks()
 
             logl = self.compute_logl(ntilde, psd)
-            #logl = - self.xp.sum( self.xp.sum(ntildentilde / cov, axis = -1) + self.nu * xp.sum(self.xp.log(cov), axis = -1) , axis = -1)
+            # logl = - self.xp.sum( self.xp.sum(ntildentilde / cov, axis = -1) + self.nu * xp.sum(self.xp.log(cov), axis = -1) , axis = -1)
 
             logl_all.append(logl)
-            
+
         logl_out = np.concatenate(logl_all)
         logl_out[~np.isfinite(logl_out)] = -self.inf
 
@@ -288,10 +287,10 @@ class Likelihood:
     def average(self, freqs, Nbins):
 
         dtildedtilde = self.get_XtildeXtilde()
-        #? not sure why I'm doing this, have to check 
-        if freqs.shape[0] // 2 != 0:
-            freqs = freqs[1:]
-            dtildedtilde = dtildedtilde[:, 1:]
+        # #? not sure why I'm doing this, have to check 
+        # if freqs.shape[0] // 2 != 0:
+        #     freqs = freqs[1:]
+        #     dtildedtilde = dtildedtilde[:, 1:]
 
         edges = self.xp.linspace(freqs.min(), freqs.max(), Nbins + 1, endpoint=True) #edges of frequency bins
         #edges = self.xp.logspace(np.log10(freqs.min()), np.log10(freqs.max()), Nbins + 1, endpoint=True) #edges of frequency bins
@@ -342,7 +341,8 @@ class Likelihood:
 
         else:
             cov = psd
-            return -  self.xp.sum(self.xp.sum(self.Y / cov, axis=-1) + self.nu * self.xp.sum(self.xp.log(cov), axis=-1), axis=-1)
+            #return -  self.xp.sum(self.xp.sum(self.Y / cov, axis=-1) + self.nu * self.xp.sum(self.xp.log(cov), axis=-1), axis=-1)
+            return - self.xp.sum(self.Y / cov + self.nu[None, :, None] * self.xp.log(cov), axis=(1,2))
 
     
     def get_covariance(self, psd):
