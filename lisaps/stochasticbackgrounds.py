@@ -8,18 +8,51 @@ import numpy as np
 
 class StochasticBackgrounds(GPUobject):
 
-    def __init__(self, backgrounds=[], background_kwargs={}, foregrounds=[], foreground_kwargs={}, use_gpu=False, TDIsetup='AET', isotropicresponse=None, GBresponse=None, channels=None, units='hertz', **kwargs):
+    def __init__(self, 
+                 backgrounds=[], 
+                 background_kwargs={}, 
+                 foregrounds=[], 
+                 foreground_kwargs={}, 
+                 use_gpu=False, 
+                 TDIsetup='AET', 
+                 isotropicresponse=None, 
+                 GBresponse=None, 
+                 channels=None, 
+                 units='strain', 
+                 correct_sagnac=True, 
+                 **kwargs):
+        """
+        Initialize the StochasticBackgrounds object.
 
-        GPUobject.__init__(self, use_gpu=use_gpu)
+        Args:
+            backgrounds (list): List of background types to include.
+            background_kwargs (dict): Keyword arguments for background functions.
+            foregrounds (list): List of foreground types to include.
+            foreground_kwargs (dict): Keyword arguments for foreground functions.
+            use_gpu (bool): Flag indicating whether to use GPU acceleration.
+            TDIsetup (str): TDI setup to use.
+            isotropicresponse (None or callable): Isotropic response function.
+            GBresponse (None or callable): GB response function.
+            channels (None or list): List of channels to include.
+            units (str): Units of the output.
+            correct_sagnac (bool): Flag indicating whether to correct for Sagnac effect.
+            **kwargs: Additional keyword arguments.
 
-        self.channels = channels
+        Raises:
+            ValueError: If a background type is not supported.
+
+        """
+        GPUobject.__init__(self, use_gpu=use_gpu, **kwargs)
+
         self.units = units
 
         self._implemented_backgrounds = self.implemented_backgrounds
         self._implemented_functions = self.implented_classes
 
+        self.available_channels = ['AA', 'EE', 'TT', 'XX', 'YY', 'ZZ', 'XY', 'XZ', 'YZ']
+
         if not isinstance(backgrounds, list):
-                backgrounds = [backgrounds]
+            backgrounds = [backgrounds]
 
         for back in backgrounds:
             if back not in self._implemented_backgrounds:
@@ -29,13 +62,25 @@ class StochasticBackgrounds(GPUobject):
         self.nbackgrounds = len(backgrounds)
 
         self.TDIsetup = TDIsetup
+
+        if channels is not None:
+            self.channels = channels
+        else:
+            if TDIsetup == 'AET':
+                self.channels = ['AA', 'EE', 'TT']
+            elif TDIsetup == 'XYZ':
+                self.channels = ['XX', 'YY', 'ZZ', 'XY', 'XZ', 'YZ']
+            else:
+                raise ValueError('TDIsetup not recognized. Choose between AET and XYZ')
+            
+        self.correct_sagnac = correct_sagnac
         self.isotropicresponse_interp = self.set_responseinterp(isotropicresponse)
 
         if not isinstance(foregrounds, list):
-                foregrounds = [foregrounds]
+            foregrounds = [foregrounds]
 
         for fore in foregrounds:
-                assert fore in self._implemented_foregrounds
+            assert fore in self._implemented_foregrounds
         
         self.foregrounds = foregrounds
         self.nforegrounds = len(foregrounds)
@@ -112,14 +157,14 @@ class StochasticBackgrounds(GPUobject):
             TFdir = '/data/asantini/packages/lisa-ps/utils/'
 
             if self.TDIsetup == 'AET':
-                response = TFdir + 'TDItransferfunction_AET.csv'
+                response = TFdir + 'TDItransferfunction_AET.csv' if self.correct_sagnac else TFdir + 'TDItransferfunction_AET_nosagnac.csv'
             elif self.TDIsetup == 'XYZ':
-                response = TFdir + 'TDItransferfunction_XYZ.csv'
+                response = [TFdir + 'TDItransferfunction_XYZreal.csv', TFdir + 'TDItransferfunction_XYZimag.csv']
 
             else:
                 raise ValueError('TDIsetup not recognized. Choose between AET and XYZ')
 
-        if isinstance(response, str):
+        if isinstance(response, (str, list)):
             responseinterp = TDIresponse(filename=response, use_gpu=self.use_gpu)
             
         elif isinstance(response, Callable):
@@ -137,16 +182,21 @@ class StochasticBackgrounds(GPUobject):
         '''
         Set the isotropic response for the TDI channels selected (only works with A, E, and T).
         '''
-        idxs = [self.available_channels.index(channel) for channel in self.channels]
-        self.isotropicresponse = self.isotropicresponse_interp(freqs)[:, idxs]
+        if self.TDIsetup == 'AET':
+            idxs = [self.available_channels.index(channel) for channel in self.channels]
+            self.isotropicresponse = self.isotropicresponse_interp(freqs)[:, idxs]
+        else:
+            self.isotropicresponse = self.isotropicresponse_interp(freqs)
     
     def set_GBresponse(self, freqs):
         '''
         Set the GB response for the TDI channels selected (only works with A, E, and T).
         '''
-        idxs = [self.available_channels.index(channel) for channel in self.channels]
-        self.GBresponse = self.GBresponse_interp(freqs)[:, idxs]
-
+        if self.TDIsetup == 'AET':
+            idxs = [self.available_channels.index(channel) for channel in self.channels]
+            self.GBresponse = self.GBresponse_interp(freqs)[:, idxs]
+        else:
+            self.GBresponse = self.GBresponse_interp(freqs)
 
 
 

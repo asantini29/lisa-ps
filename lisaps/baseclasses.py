@@ -64,7 +64,10 @@ class GPUobject:
 
             self.interpkwargs = interpkwargs
 
-        kind = self.interpkwargs.pop('kind')
+        try:
+            kind = self.interpkwargs.pop('kind')
+        except KeyError:
+            kind = 'akima'
 
         if kind == 'cubic':
             self.interp =  CubicSplineInterpolant
@@ -556,18 +559,26 @@ class TDIresponse(GPUobject):
         Initializes a TDIresponse object.
         
         Args:
-            filename (str): The path to the file containing TDI response data.
+            filename (st or list): The path to the file containing TDI response data. 
             use_gpu (bool, optional): Flag indicating whether to use GPU acceleration. Default: `False`.
             interpkwargs (dict, optional): Additional keyword arguments for the interpolation function. Default: dict(kind='akima', axis=0).
         """
         GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs)
 
-        TDIcsd_all = self.xp.transpose(self.xp.genfromtxt(filename, delimiter=','))
+        if isinstance(filename, str):
+            TDIcsd_real = self.xp.transpose(self.xp.genfromtxt(filename, delimiter=','))
+            TDIcsd_imag = self.xp.zeros_like(TDIcsd_real)
 
-        self.freqs = self.xp.real(TDIcsd_all[0])
+        elif isinstance(filename, list):
+            TDIcsd_real = self.xp.transpose(self.xp.genfromtxt(filename[0], delimiter=','))
+            TDIcsd_imag = self.xp.transpose(self.xp.genfromtxt(filename[1], delimiter=','))
+        else:
+            raise ValueError('filename must be a string or a list of strings')
+        
+        self.freqs = self.xp.real(TDIcsd_real[0])
 
-        self.tfs_real = self.xp.stack((self.xp.real(TDIcsd_all[i]) for i in range(1, len(TDIcsd_all)))).T
-        self.tfs_imag = self.xp.stack((self.xp.imag(TDIcsd_all[i]) for i in range(1, len(TDIcsd_all)))).T
+        self.tfs_real = self.xp.stack([self.xp.real(TDIcsd_real[i]) for i in range(1, len(TDIcsd_real))]).T
+        self.tfs_imag = self.xp.stack([self.xp.real(TDIcsd_imag[i]) for i in range(1, len(TDIcsd_imag))]).T
 
         self.TDIinterpolant_real = self.interp(self.freqs, self.tfs_real)
         self.TDIinterpolant_imag = self.interp(self.freqs, self.tfs_imag)

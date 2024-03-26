@@ -75,6 +75,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
                  foreground_kwargs={},
                  isotropicresponse=None, 
                  GBresponse=None,
+                 correct_sagnac=True,
                  ftol=0.1,
                  **kwargs
                  ):
@@ -99,8 +100,10 @@ class Psd(BaseNoise, StochasticBackgrounds):
                                        isotropicresponse=isotropicresponse, 
                                        GBresponse=GBresponse, 
                                        channels=self.channels, 
-                                       units=units, 
-                                       use_gpu=use_gpu)
+                                       units=units,
+                                       use_gpu=use_gpu,
+                                       correct_sagnac=correct_sagnac
+                                       )
 
         self.PSDS_design = None
 
@@ -377,6 +380,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
             except:
                 self.set_isotropicresponse(freqs)
                 response = self.isotropicresponse[self.xp.newaxis, :, :]
+                #breakpoint()
 
             sgwbs_all = self.xp.zeros_like(PSDS)
 
@@ -384,7 +388,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
                 
                 if len(backargs[i]) > 0:
                     back = self.backgrounds[i]
-                    h2omega = self.backgrounds_fn[i](freqs, backargs[i], **kwargs[back])            
+                    h2omega = self.backgrounds_fn[i](freqs, backargs[i], **kwargs[back])[:,:,None]         
 
                     if self.backgroundperturbation:
 
@@ -395,7 +399,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
                         
                         logperturbation = self.logperturbation_numba(freqs=freqs, knots=bknots, weights=bweights)
 
-                        h2omega = h2omega[:,:,None] * 10**logperturbation
+                        h2omega = h2omega * 10**logperturbation
 
                     h2omega = self.xp.repeat(h2omega, self.Ncov, axis=-1)
                     Shs = self.convert_to_psd(freqs, h2omega)
