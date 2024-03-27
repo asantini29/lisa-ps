@@ -532,7 +532,7 @@ class BaseNoise(GPUobject):
         self.PSDS_design = (self.xp.asarray([self.available_functions[channel](freqs) for channel in self.channels])).transpose(1,2,0)
 
     def get_PSDS(self, freqs=None, overwrite=False, **kwargs):
-        if (self.PSDS_design is None):
+        if not hasattr(self, 'PSDS_design'):
             if freqs is None:
                 raise ValueError('provide frequencies')
             else:

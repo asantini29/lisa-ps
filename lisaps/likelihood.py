@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 from pysco import performance
+from typing import Any, Callable
+
 import numpy as np
 from scipy import signal
 try:
@@ -23,8 +25,8 @@ class Likelihood:
                     correlated=False,
                     fullmatrix=False,
                     Nbins=1000,
+                    f_segments=1e-4,
                     window=('kaiser', 30),
-                    Nbw=None,
                     noisekeys=[],
                     backgroundkeys=[],
                     foregroundkeys=[],
@@ -57,11 +59,14 @@ class Likelihood:
 
             assert (d.shape[0] == t.shape[0]) and (d.shape[1] == self.nchannels), 'Dimensionality mismatch'
             self.d = d
-            self.window = signal.get_window(window, d.shape[0]) if window is not None else np.ones_like(t)
-
-            self.Nbw = Nbw if Nbw is not None else d.shape[0] * np.sum(self.window**2) / np.sum(self.window)**2
-            
             self.dt = t[1] - t[0]
+
+            # self.window = signal.get_window(window, d.shape[0]) if window is not None else np.ones_like(t)
+
+            # self.Nbw = d.shape[0] * np.sum(self.window**2) / np.sum(self.window)**2
+
+            self.window, self.Nbw = self.get_window(window, d.shape[0])
+            
             freqs = np.fft.rfftfreq(d.shape[0], self.dt)
             #freqs = np.fft.fftfreq(d.shape[0], self.dt)
             self.frequencymask = (freqs > fmin) & (freqs < fmax) # remove ALL the wiggles CAREFULL: we MUST find a way to include them
@@ -78,7 +83,24 @@ class Likelihood:
             self.fullmatrix = fullmatrix
 
             if average: # without signal we can use an averaged likelihood
-                self.freqs, self.Y, self.nu = self.average(freqs, Nbins)
+                #self.freqs, self.Y, self.nu = self.average(freqs, Nbins)
+                P = self.periodogram_matrix(self.d, 1/self.dt, window)
+                self.freqs, self.P, sizes = self.smooth(P, 1/self.dt, f_segments)
+                self.nu = sizes / self.Nbw
+
+                p = min(self.nchannels, 3)
+
+                if self.fullmatrix:
+                    self.Y = self.nu[None, :, None, None] * self.P[None, :, :, :]
+                    norm = self.xp.sum((self.nu - p) * self.xp.log(self.xp.linalg.det(self.Y)).real) # p = # of channels
+                else:
+                    self.Y = self.nu[None, :, None] * self.P[None, :, :]
+                    norm = self.xp.sum((self.nu - p) * self.xp.sum(self.xp.log(self.Y), axis=-1)) # p = # of channels
+                
+                norm += self.xp.sum((self.nu - p) * p * self.xp.log(self.nu)) 
+                self.norm = norm
+                
+                #breakpoint()
                 self.compute_logl = self.wishart_logl
             else:
                 self.freqs = freqs
@@ -287,10 +309,6 @@ class Likelihood:
     def average(self, freqs, Nbins):
 
         dtildedtilde = self.get_XtildeXtilde()
-        # #? not sure why I'm doing this, have to check 
-        # if freqs.shape[0] // 2 != 0:
-        #     freqs = freqs[1:]
-        #     dtildedtilde = dtildedtilde[:, 1:]
 
         edges = self.xp.linspace(freqs.min(), freqs.max(), Nbins + 1, endpoint=True) #edges of frequency bins
         #edges = self.xp.logspace(np.log10(freqs.min()), np.log10(freqs.max()), Nbins + 1, endpoint=True) #edges of frequency bins
@@ -302,13 +320,162 @@ class Likelihood:
 
         for i, (start, stop) in enumerate(zip(edges[:-1], edges[1:])):
             mask = (freqs >= start) & (freqs < stop)
-            centers[i] = self.xp.median(freqs[mask])
+            centers[i] = 0.5 * (start + stop) #self.xp.median(freqs[mask])
 
             nu[i] = np.count_nonzero(freqs[mask]) / self.Nbw
  
             Y[:, i] = self.xp.mean(dtildedtilde[:, mask], axis = 1) * nu[i] # eq 29 in arXiv:2302.12573
 
         return centers, Y, nu
+    
+    def periodogram_matrix(self, data, fs, wd_func=('kaiser', 30)):
+        """
+        Compute the periodogram matrix of the data.
+        
+        Parameters
+        ----------
+        data_xyz : array
+            The data to compute the periodogram matrix of.
+        fs : float
+            The sampling frequency of the data.
+        wd_func : function
+            The window function to apply to the data.
+            
+        Returns
+        -------
+        P : array
+            The periodogram matrix of the data.
+        """
+        
+        # Get the number of data points.
+        n = data.shape[0]
+        
+        # Compute the window function.
+        wd, nenbw = self.get_window(wd_func, n)
+        k2 = np.sum(wd**2)
+        norm = np.sqrt(2 / (fs * k2))    
+        # Compute the periodogram matrix.
+        dtilde = (np.fft.fft(data * wd[:, None], axis=0) * norm)[:,:, None]
+        dtilde_conj = np.conj(dtilde)
+
+        P = (dtilde @ dtilde_conj.transpose(0, 2, 1))
+
+        if not self.fullmatrix:
+            P = np.einsum('...ii->...i', P)
+        
+        return P
+
+    def smooth(self, y, fs, f_seg, weights_func=None):
+        """
+        Smooth the unbiased log-periodogram data y.
+        Can be either the log raw periodogram + gamma,
+        or its expectation.
+
+        Parameters
+        ----------
+        y : ndarray
+            unbiased log-periodogram array, size n_freq x n_channels
+        fs : float
+            sampling frequency
+        f_seg : float or ndarray
+            segment frequencies
+
+        Returns
+        -------
+        freqs_h : ndarray
+            frequencies where the smoothed log-periodogram is computed
+        p_h : ndarray
+            smoothed periodogram at frequencies freqs_h
+        segment_sizes : float or ndarray
+            Sizes of the frequency segments
+        """
+        x_shape = y.shape
+        freqs = np.fft.fftfreq(x_shape[0]) * fs
+        #y = self.xp.asarray(y)
+
+        # Observation duration
+        t_obs = x_shape[0] / fs
+        if isinstance(f_seg, float):
+            # Smoothing bandwidth
+            bandwidth = int(f_seg / (fs/x_shape[0]))
+            # Segment frequencies
+            f_seg_arr = freqs[freqs>=0][0::bandwidth]
+        elif isinstance(f_seg, (np.ndarray, list)):
+            f_seg_arr = np.asarray(f_seg)
+        else:
+            raise TypeError("f0 should be a float or array_like")
+        # Number of segments
+        n_seg = len(f_seg_arr)
+        # Indices of the segment bounds
+        i_seg = np.round(f_seg_arr * t_obs).astype(int)
+        # Sizes of all intervals
+        segment_sizes = i_seg[1:] - i_seg[:-1]
+        # Middle frequencies
+        freqs_h = (f_seg_arr[:-1] + f_seg_arr[1:]) / 2.0
+        # Weighting?
+        if weights_func is None:
+            weights_func = np.ones
+
+        weights_vector = [weights_func(ss) for ss in segment_sizes]
+
+        if len(np.shape(y)) == 3:
+            # Compute the averages over each segment
+            p_h = self.xp.array(
+                [np.sum(y[i_seg[j]:i_seg[j+1]]*weights_vector[j][:, np.newaxis, np.newaxis], 
+                        axis=0)/np.sum(weights_vector[j])
+                for j in range(n_seg-1)], dtype=y.dtype)
+
+        elif len(np.shape(y)) == 2:
+            p_h = self.xp.array(
+                [np.sum(y[i_seg[j]:i_seg[j+1]]*weights_vector[j][:, np.newaxis], 
+                        axis=0)/np.sum(weights_vector[j])
+                for j in range(n_seg-1)], dtype=y.dtype)
+
+        elif len(np.shape(y)) == 1:
+            p_h = self.xp.array(
+                [np.sum(y[i_seg[j]:i_seg[j+1]]*weights_vector[j], 
+                        axis=0)/np.sum(weights_vector[j])
+                for j in range(n_seg-1)], dtype=y.dtype)
+
+        freqmask = (freqs_h >= self.fmin) & (freqs_h <= self.fmax)
+
+        segment_sizes = self.xp.asarray(segment_sizes[freqmask])
+        p_h = p_h[freqmask]
+        freqs_h = self.xp.asarray(freqs_h[freqmask])
+
+        return freqs_h, p_h, segment_sizes
+
+    def get_window(self, window_func, n):
+
+        if window_func is None:
+            window, nenbw = np.ones(n), 1.0
+
+        elif isinstance(window_func, (str, tuple)):
+            window = signal.get_window(window_func, n)
+
+            if window_func == 'blackman':
+                nenbw = 2.0044
+            elif window_func == 'hanning':
+                nenbw = 1.5000
+            elif window_func == 'nuttal':
+                nenbw = 1.9761
+
+            else:
+                nenbw = n * np.sum(window**2) / np.sum(window)**2
+
+        elif isinstance(window_func, Callable):
+            window = window_func(n)
+
+            if window_func == np.blackman:
+                nenbw = n * np.sum(window**2) / np.sum(window)**2 #nenbw = 2.0044
+            elif window_func == np.hanning:
+                nenbw = 1.5000
+            elif window_func == np.nuttal:
+                nenbw = 1.9761
+            else:
+                nenbw = n * np.sum(window**2) / np.sum(window)**2
+
+        return window, nenbw
     
 
     def whittle_logl(self, ntilde, psd):
@@ -342,7 +509,7 @@ class Likelihood:
         else:
             cov = psd
             #return -  self.xp.sum(self.xp.sum(self.Y / cov, axis=-1) + self.nu * self.xp.sum(self.xp.log(cov), axis=-1), axis=-1)
-            return - self.xp.sum(self.Y / cov + self.nu[None, :, None] * self.xp.log(cov), axis=(1,2))
+            return - 0.5 * self.xp.sum(self.Y / cov + self.nu[None, :, None] * self.xp.log(cov), axis=(1,2)) + self.norm
 
     
     def get_covariance(self, psd):
@@ -362,6 +529,7 @@ class Likelihood:
             covariance[:,:,2,1] = self.xp.conj(psd[:,:,5])
 
         return covariance
+
 
         
 
