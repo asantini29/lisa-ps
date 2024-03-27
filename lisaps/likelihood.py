@@ -509,13 +509,12 @@ class Likelihood:
         else:
             cov = psd
             #return -  self.xp.sum(self.xp.sum(self.Y / cov, axis=-1) + self.nu * self.xp.sum(self.xp.log(cov), axis=-1), axis=-1)
-            return - 0.5 * self.xp.sum(self.Y / cov + self.nu[None, :, None] * self.xp.log(cov), axis=(1,2)) + self.norm
+            return - self.xp.sum(self.Y / cov + self.nu[None, :, None] * self.xp.log(cov), axis=(1,2)) + self.norm
 
     
     def get_covariance(self, psd):
         nin, nfreqs = psd.shape[0], psd.shape[1]
         covariance = self.xp.zeros(shape=(nin, nfreqs, self.nchannels, self.nchannels))
-
         for i in range(self.nchannels):
             covariance[:,:,i,i] = psd[:,:,i]
 
