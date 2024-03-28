@@ -126,10 +126,10 @@ class Likelihood:
         self.inf = inf
 
         self.rj = rj
-        if self.rj:
-            self.nsubset = 1
-        else:     
-            self.nsubset = nsubset
+        # if self.rj:
+        #     self.nsubset = 1
+        # else:     
+        self.nsubset = nsubset
 
         @property
         def tc_container(self):

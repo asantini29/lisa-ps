@@ -250,7 +250,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
             inds_group_subtract = inds_per_group[group_index][group_inverse]
             inds_per_group = inds_per_group - inds_group_subtract
 
-            ngroups = group_unique.max().item() + 1
+            ngroups = (group_unique.max().item() - group_unique.min().item() )+ 1 # because of subsetting
             maxgroups = group_count.max().item()
 
             knots_full_nans = self.xp.full((ngroups, maxgroups, knots_full.shape[-1]), self.xp.nan)
@@ -287,7 +287,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
             groups_knots = groups[1:] #still a list
 
             groups_unique = np.unique(groups[0])
-            ngroups = groups_unique.max().item() + 1
+            ngroups = ( groups_unique.max().item() - groups_unique.min().item() ) + 1 # because of subsetting
 
             try:
                 maxgroups = self.Nknotsmax  
@@ -297,7 +297,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
                     _, counts = np.unique(g, return_counts=True)
                     maxgroups = counts.max().item() if counts.max().item() > maxgroups else maxgroups
                 self.Nknotsmax = maxgroups
-
+            
             knots_full_nans = self.xp.full((ngroups, maxgroups, 2*self.Ncov), self.xp.nan)
             leftedge_full = self.xp.concatenate((self.xp.full((ngroups, self.Ncov), self.logfmin), leftedge_full), axis=1)[:, None, :]
             rightedge_full = self.xp.concatenate((self.xp.full((ngroups, self.Ncov), self.logfmax), rightedge_full), axis=1)[:, None, :]
