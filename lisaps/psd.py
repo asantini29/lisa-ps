@@ -250,7 +250,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
             inds_group_subtract = inds_per_group[group_index][group_inverse]
             inds_per_group = inds_per_group - inds_group_subtract
 
-            ngroups = group_unique.max().item() + 1
+            ngroups = (group_unique.max().item() - groups_unique.min().item() ) + 1
             maxgroups = group_count.max().item()
 
             knots_full_nans = self.xp.full((ngroups, maxgroups, knots_full.shape[-1]), self.xp.nan)
@@ -287,7 +287,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
             groups_knots = groups[1:] #still a list
 
             groups_unique = np.unique(groups[0])
-            ngroups = groups_unique.max().item() + 1
+            ngroups = (groups_unique.max().item() - groups_unique.min().item()) + 1
 
             try:
                 maxgroups = self.Nknotsmax  
