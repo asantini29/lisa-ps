@@ -151,6 +151,14 @@ class StochasticBackgrounds(GPUobject):
              'fopt': PhaseTransitions
         }
     
+    @property
+    def injection(self):
+        return {
+            'sobhs': self.xp.array([3.4e-13, 2/3]),
+            'cs': self.xp.array([5.5e-12, 0]),
+            'fopt': self.xp.array([4.22e-12, 9.86e-4, 2.88e-14, 200])
+        }
+    
     def set_responseinterp(self, response):
 
         if response is None: #use default files
@@ -205,13 +213,19 @@ class EnergyDensity(ABC, GPUobject):
     def __init__(self, use_gpu=False, interpkwargs=None):
         GPUobject.__init__(self, use_gpu, interpkwargs)
 
-    @abstractproperty
+    @property 
+    @abstractmethod
     def ndim(self):
         pass
 
     @abstractmethod
     def check_ndim(self, args):
          pass
+    
+    @abstractmethod
+    def __call__(self, freqs, args):
+        pass
+
     
 
 class PowerLaw(EnergyDensity):
@@ -242,6 +256,14 @@ class PowerLaw(EnergyDensity):
         h2omega = A * (self.xp.atleast_2d(freqs) / self.fknee)**n
 
         return h2omega
+    
+    @property
+    def true_params(self):
+        return self._true_params
+    
+    @true_params.setter
+    def true_params(self, true_params):
+        self._true_params = true_params
 
 
 
@@ -332,6 +354,14 @@ class PhaseTransitions(EnergyDensity):
             return h2omega_sw + h2omega_turb
 
         return h2omega_sw
+    
+    @property
+    def true_params(self):
+        return self._true_params
+    
+    @true_params.setter
+    def true_params(self, true_params):
+        self._true_params = true_params
 
 
 class GBForeground(EnergyDensity):

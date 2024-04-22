@@ -12,7 +12,7 @@ except:
 class Likelihood:
 
     def __init__(self, 
-                    compute_psd, 
+                    psd_fn, 
                     t=None,
                     d=None,
                     freqs=None,
@@ -115,7 +115,7 @@ class Likelihood:
 
             self.nsource_wf_gen = len(source_wf_gen)
 
-        self.compute_psd = compute_psd
+        self.psd_fn = psd_fn
 
         self.noisekeys = noisekeys
         self.backgroundkeys = backgroundkeys
@@ -205,7 +205,7 @@ class Likelihood:
                 foreground_args += [foreground_args_all[j][inds]]
                 foreground_groups += [foreground_groups_all[j][inds]]
 
-            psd = self.compute_psd(self.freqs,
+            psd = self.psd_fn(self.freqs,
                                    noise_args,
                                    background_args,
                                    foreground_args,
