@@ -585,9 +585,12 @@ class BaseNoise(GPUobject):
         self.PSDS_design = self.compute_batched_PSDS(asdTM, asdOMS, freqs)
 
     
-    def get_PSDS(self, asdTM, asdOMS, freqs=None):
+    def get_PSDS(self, asdTM, asdOMS, freqs=None, squeeze=False):
         asdTM, asdOMS = jnp.atleast_1d(asdTM), jnp.atleast_1d(asdOMS)
-        return self.compute_batched_PSDS(asdTM, asdOMS, freqs)
+        if squeeze:
+            return jnp.squeeze(self.compute_batched_PSDS(asdTM, asdOMS, freqs))
+        else:
+            return self.compute_batched_PSDS(asdTM, asdOMS, freqs)
     
 
 class TDIresponse(GPUobject):

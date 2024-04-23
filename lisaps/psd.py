@@ -393,41 +393,6 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
         '''
         PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
-
-        '''
-        #* put here the if, hopefully it will be more flexible (but probably slower)
-        if self.fitASDs:
-            self.PSDS_design = self.constmod(freqs, noiseargs[:1])    
-            noiseargs = noiseargs[1:]  
-            noisegroups = noisegroups[1:]
-
-        else:
-            if self.PSDS_design is None:
-                self.set_PSDS(freqs)   
-
-        if self.noiseperturbation:
-            if not isinstance(noiseargs, list):
-                noiseargs = [noiseargs]
-        
-            if not isinstance(noisegroups, list):
-                noisegroups = [noisegroups]
-                
-            nin = min([arg.shape[0] for arg in noiseargs])
-            PSDS = self.xp.empty((nin, len(freqs), self.Ncov))
-
-            knots, weights = self.prepare_interp_input_numba(args=noiseargs, groups=noisegroups)
-            
-            ftol_mask = self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1)
-            ftol_mask = self.xp.broadcast_to(ftol_mask, (freqs.shape[0], self.Ncov, nin)).transpose(2, 0, 1)
-            PSDS[ftol_mask] = self.xp.nan
-            
-            logperturbation = self.logperturbation_numba(freqs=freqs, knots=knots, weights=weights)
-
-            PSDS = self.PSDS_design * 10**(logperturbation)
-
-        else:
-            PSDS = self.PSDS_design
-        '''
         
         if self.nbackgrounds > 0:
             
