@@ -528,11 +528,3 @@ class Likelihood:
             covariance[:,:,2,1] = self.xp.conj(psd[:,:,5])
 
         return covariance
-
-
-        
-
-
-            
-
-
