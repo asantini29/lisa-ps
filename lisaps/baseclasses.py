@@ -155,7 +155,7 @@ class BaseNoise(GPUobject):
         tdi_tf_oms_T(freqs): TDI transfer function for ISI OMS noise in TDI T.
     """
 
-    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, equal_arms=False, fs=None, Ncov=None, channels='AET', use_gpu=False, units='hertz', interpkwargs=dict(kind='akima', axis=1)):
+    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, equal_arms=False, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', interpkwargs=dict(kind='akima', axis=1)):
         GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs)
 
         self.armlength = ARMLENGTH_EQUAL if equal_arms else ARMLENGTH_AVERAGE
