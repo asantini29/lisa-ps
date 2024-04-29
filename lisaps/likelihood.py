@@ -18,7 +18,7 @@ class Likelihood:
                     freqs=None,
                     dtilde=None,
                     fmin=1e-4,
-                    fmax=2.5e-2,
+                    fmax=2.9e-2,
                     source_wf_gen=None,
                     nchannels=3,
                     average=False,
@@ -334,7 +334,7 @@ class Likelihood:
         
         Parameters
         ----------
-        data_xyz : array
+        data : array
             The data to compute the periodogram matrix of.
         fs : float
             The sampling frequency of the data.
@@ -491,8 +491,9 @@ class Likelihood:
 
         else:
             cov = psd
-            ntildentilde = self.get_XtildeXtilde()
-            logl = - self.xp.sum( ntildentilde / cov + self.xp.log(cov),  axis = (1, 2))
+            #ntildentilde = self.get_XtildeXtilde()
+            #logl = - self.xp.sum( ntildentilde / cov + self.xp.log(cov),  axis = (1, 2))
+            logl = - self.xp.sum( self.dtildedtilde / cov + self.xp.log(cov),  axis = (1, 2))
 
         return logl
     

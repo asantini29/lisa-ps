@@ -1,4 +1,5 @@
 from abc import ABC
+from typing import Callable
 import numpy as np
 
 try:
@@ -12,6 +13,7 @@ except (ModuleNotFoundError, ImportError):
 from few.summation.interpolatedmodesum import CubicSplineInterpolant
 from scipy.interpolate import make_interp_spline as scipy_make_interp_spline
 from scipy.interpolate import Akima1DInterpolator as scipy_Akima1DInterpolator
+from scipy import signal
 
 from .constants import *
 from .akima import AkimaInterpolant
@@ -550,6 +552,7 @@ class BaseNoise(GPUobject):
         #return xp.atleast_2d(testmass_T(asd=asdTM)**2) + xp.atleast_2d(oms_T(asd=asdOMS)*2)
         return (self.testmass_XY(asdTM, freqs) + self.oms_XY(asdOMS, freqs))
     
+    @partial(jax.vmap, in_axes=(None, 0, 0, None))
     def compute_PSDS(self, asdTM, asdOMS, freqs):
         """
         Compute the Power Spectral Density (PSD) for each channel.
@@ -565,32 +568,31 @@ class BaseNoise(GPUobject):
         """
         return (jnp.asarray([self.available_functions[channel](asdTM, asdOMS, freqs) for channel in self.channels])).transpose(1,0)
     
-    def compute_batched_PSDS(self, asdTM, asdOMS, freqs):
-        """
-        Compute the batched Power Spectral Density (PSD) using the given ASDs and frequencies.
+    # def compute_batched_PSDS(self, asdTM, asdOMS, freqs):
+    #     """
+    #     Compute the batched Power Spectral Density (PSD) using the given ASDs and frequencies.
 
-        Parameters:
-        - asdTM (ndarray): The ASD (Amplitude Spectral Density) for the TM (Test Mass) channel.
-        - asdOMS (ndarray): The ASD for the OMS (Optical Metrology System) channel.
-        - freqs (ndarray): The frequencies at which to compute the PSD.
+    #     Parameters:
+    #     - asdTM (ndarray): The ASD (Amplitude Spectral Density) for the TM (Test Mass) channel.
+    #     - asdOMS (ndarray): The ASD for the OMS (Optical Metrology System) channel.
+    #     - freqs (ndarray): The frequencies at which to compute the PSD.
 
-        Returns:
-        - ndarray: The computed batched PSDs.
+    #     Returns:
+    #     - ndarray: The computed batched PSDs.
 
-        """
-        return jax.vmap(self.compute_PSDS, in_axes=(0, 0, None))(asdTM, asdOMS, freqs)
+    #     """
+    #     return jax.vmap(self.compute_PSDS, in_axes=(0, 0, None))(asdTM, asdOMS, freqs)
 
-    def set_PSDS(self, freqs):
+    def set_PSDS(self, freqs, squeeze=False):
         asdTM, asdOMS = jnp.atleast_1d(self.asdTM), jnp.atleast_1d(self.asdOMS)
-        self.PSDS_design = self.compute_batched_PSDS(asdTM, asdOMS, freqs)
-
+        self.PSDS_design = self.get_PSDS(asdTM, asdOMS, freqs, squeeze)
     
     def get_PSDS(self, asdTM, asdOMS, freqs=None, squeeze=False):
         asdTM, asdOMS = jnp.atleast_1d(asdTM), jnp.atleast_1d(asdOMS)
         if squeeze:
-            return jnp.squeeze(self.compute_batched_PSDS(asdTM, asdOMS, freqs))
+            return jnp.squeeze(self.compute_PSDS(asdTM, asdOMS, freqs))
         else:
-            return self.compute_batched_PSDS(asdTM, asdOMS, freqs)
+            return self.compute_PSDS(asdTM, asdOMS, freqs)
     
 
 class TDIresponse(GPUobject):
@@ -652,3 +654,264 @@ class TDIresponse(GPUobject):
             return response.get()  # return a numpy array
         else:
             return response  # return a self.xp array
+
+class DataContainer(GPUobject):
+
+    def __init__(self, 
+                t=None,
+                d=None,
+                freqs=None,
+                dtilde=None,
+                nchannels=3,
+                fmin=1e-4,
+                fmax=2.9e-2,
+                average=False,
+                Nbins=1000,
+                fullmatrix=False,
+                f_segments=1e-4,
+                window=('kaiser', 30),
+                use_gpu=False,
+                ):
+        
+        GPUobject.__init__(self, use_gpu=use_gpu)
+
+        self.nchannels = nchannels
+        self.fullmatrix = fullmatrix
+
+        if (t is None) and (freqs is None):
+            raise ValueError('Provide either the times or frequencies')
+
+        if (d is None) and (dtilde is None):
+            raise ValueError('Provide the data in either the time or frequency domain')
+        
+        if (t is None) and (freqs is not None) and (d is None) and (dtilde is not None):
+            self.domain = 'frequency'
+            assert (dtilde.shape[0] == freqs.shape[0]) and (dtilde.shape[1] == self.nchannels), 'Dimensionality mismatch'
+            self.df = freqs[1] - freqs[0]
+
+            self.window, self.Nbw = self.get_window(None, dtilde.shape[0])
+
+            d_tmp = dtilde
+        
+        if (t is not None) and (freqs is None) and (d is not None) and (dtilde is None):
+            self.domain = 'time'
+            assert (d.shape[0] == t.shape[0]) and (d.shape[1] == self.nchannels), 'Dimensionality mismatch'
+            self.d = d
+            self.dt = t[1] - t[0]
+
+            self.window, self.Nbw = self.get_window(window, d.shape[0])
+            
+            freqs = jnp.fft.rfftfreq(d.shape[0], self.dt)
+
+            if fmin is not None and fmax is not None:
+                self.fmin = fmin
+                self.fmax = fmax
+
+            else:
+                self.fmin = freqs.min()
+                self.fmax = freqs.max()
+
+            self.frequencymask = (freqs > self.fmin) & (freqs < self.fmax) # remove ALL the wiggles CAREFULL: we MUST find a way to include them
+            freqs = self.xp.array(freqs[self.frequencymask])
+
+            d_tmp = d
+
+        if fmin is not None and fmax is not None:
+            self.fmin = fmin
+            self.fmax = fmax
+
+        else:
+            self.fmin = freqs.min()
+            self.fmax = freqs.max()
+
+        self.frequencymask = (freqs > self.fmin) & (freqs < self.fmax) # remove ALL the wiggles CAREFULL: we MUST find a way to include them
+        freqs = jnp.array(freqs[self.frequencymask])
+
+        self.dtilde = self.get_Xtilde(d_tmp)        
+
+        if average: # without signal we can use an averaged likelihood
+
+            P = self.periodogram_matrix(self.d, 1/self.dt, window)
+
+            self.freqs, self.P, sizes = self.smooth(P, 1/self.dt, f_segments)
+            self.nu = sizes / self.Nbw
+
+            p = min(self.nchannels, 3)
+
+            if self.fullmatrix:
+                self.Y = self.nu[None, :, None, None] * self.P[None, :, :, :]
+                #norm = self.xp.sum((self.nu - p) * self.xp.log(self.xp.linalg.det(self.Y)).real) # p = # of channels
+            else:
+                self.Y = self.nu[None, :, None] * self.P[None, :, :]
+                #norm = self.xp.sum((self.nu - p) * self.xp.sum(self.xp.log(self.Y), axis=-1)) # p = # of channels
+            
+            #norm += self.xp.sum((self.nu - p) * p * self.xp.log(self.nu)) 
+            #self.norm = norm
+
+        else:
+            self.freqs = freqs
+            self.dtildedtilde =self.get_XtildeXtilde(dtilde)
+            self.nu = 1
+
+    def get_Xtilde(self, d=None):
+
+        if self.domain == 'time':
+            if d is None:
+                d = self.d
+
+            norm = 2.0 * self.dt / np.sum(self.window**2)
+            Xtilde = jnp.asarray([np.fft.rfft(d[:, i] * self.window)[self.frequencymask] for i in range(self.nchannels)]).T * np.sqrt(norm) #ALREADY NORMALIZED, refer to arXiv:2302.12573
+
+        elif self.domain == 'frequency':
+            if d is None:
+                d = self.dtilde
+
+            d = d[self.frequencymask, :]
+            norm = 2.0 / self.df / np.sum(self.window**2)
+            Xtilde = d * np.sqrt(norm) #ALREADY NORMALIZED, refer to arXiv:2302.12573
+        return Xtilde
+
+    
+    def get_XtildeXtilde(self, dtilde=None):
+        if dtilde is None:
+            dtilde = self.dtilde
+        if self.fullmatrix:
+            return jnp.einsum('...i,...j->...ij', jnp.conj(dtilde), dtilde)[jnp.newaxis, :, :, :] #vectorized over axis 0
+            #return self.xp.real(self.xp.einsum('...i,...j->...ij', self.xp.conj(dtilde), dtilde))[self.xp.newaxis, :, :, :] #vectorized over axis 0
+        else:
+            return  jnp.abs(jnp.conj(dtilde) * dtilde)[jnp.newaxis, :, :] #vectorized over axis 0
+            #return self.xp.real(self.xp.conj(dtilde) * dtilde)[self.xp.newaxis, :, :] #vectorized over axis 
+
+    def periodogram_matrix(self, data, fs, wd_func=('kaiser', 30)):
+        """
+        Compute the periodogram matrix of the data.
+        
+        Parameters
+        ----------
+        data : array
+            The data to compute the periodogram matrix of.
+        fs : float
+            The sampling frequency of the data.
+        wd_func : function
+            The window function to apply to the data.
+            
+        Returns
+        -------
+        P : array
+            The periodogram matrix of the data.
+        """
+        
+        # Get the number of data points.
+        n = data.shape[0]
+        
+        # Compute the window function.
+        wd, nenbw = self.get_window(wd_func, n)
+        k2 = jnp.sum(wd**2)
+        norm = jnp.sqrt(2 / (fs * k2))    
+        # Compute the periodogram matrix.
+        dtilde = (jnp.fft.fft(data * wd[:, None], axis=0) * norm)[:,:, None]
+        dtilde_conj = jnp.conj(dtilde)
+
+        P = (dtilde @ dtilde_conj.transpose(0, 2, 1))
+
+        if not self.fullmatrix:
+            P = jnp.einsum('...ii->...i', P)
+        
+        return P
+
+    def smooth(self, y, fs, f_seg, weights_func=None):
+        """
+        Smooth the unbiased log-periodogram data y.
+        Can be either the log raw periodogram + gamma,
+        or its expectation.
+
+        Parameters
+        ----------
+        y : ndarray
+            unbiased log-periodogram array, size n_freq x n_channels
+        fs : float
+            sampling frequency
+        f_seg : float or ndarray
+            segment frequencies
+
+        Returns
+        -------
+        freqs_h : ndarray
+            frequencies where the smoothed log-periodogram is computed
+        p_h : ndarray
+            smoothed periodogram at frequencies freqs_h
+        segment_sizes : float or ndarray
+            Sizes of the frequency segments
+        """
+        x_shape = y.shape
+        freqs = jnp.fft.fftfreq(x_shape[0]) * fs
+        #y = self.xp.asarray(y)
+
+        # Observation duration
+        t_obs = x_shape[0] / fs
+        if isinstance(f_seg, float):
+            # Smoothing bandwidth
+            bandwidth = int(f_seg / (fs/x_shape[0]))
+            # Segment frequencies
+            f_seg_arr = freqs[freqs>=0][0::bandwidth]
+        elif isinstance(f_seg, (jnp.ndarray, list)):
+            f_seg_arr = jnp.asarray(f_seg)
+        else:
+            raise TypeError("f0 should be a float or array_like")
+        # Number of segments
+        n_seg = len(f_seg_arr)
+        # Indices of the segment bounds
+        i_seg = np.round(f_seg_arr * t_obs).astype(int)
+        # Sizes of all intervals
+        segment_sizes = i_seg[1:] - i_seg[:-1]
+        # Middle frequencies
+        freqs_h = (f_seg_arr[:-1] + f_seg_arr[1:]) / 2.0
+        # Weighting?
+        if weights_func is None:
+            weights_func = jnp.ones
+
+        weights_vector = [weights_func(ss) for ss in segment_sizes]
+
+        if len(np.shape(y)) == 3:
+            # Compute the averages over each segment
+            p_h = jnp.array(
+                [jnp.sum(y[i_seg[j]:i_seg[j+1]]*weights_vector[j][:, jnp.newaxis, jnp.newaxis], 
+                        axis=0)/jnp.sum(weights_vector[j])
+                for j in range(n_seg-1)], dtype=y.dtype)
+
+        elif len(jnp.shape(y)) == 2:
+            p_h = jnp.array(
+                [jnp.sum(y[i_seg[j]:i_seg[j+1]]*weights_vector[j][:, jnp.newaxis], 
+                        axis=0)/jnp.sum(weights_vector[j])
+                for j in range(n_seg-1)], dtype=y.dtype)
+
+        elif len(np.shape(y)) == 1:
+            p_h = self.xp.array(
+                [jnp.sum(y[i_seg[j]:i_seg[j+1]]*weights_vector[j], 
+                        axis=0)/jnp.sum(weights_vector[j])
+                for j in range(n_seg-1)], dtype=y.dtype)
+
+        freqmask = (freqs_h >= self.fmin) & (freqs_h <= self.fmax)
+
+        segment_sizes = jnp.asarray(segment_sizes[freqmask])
+        p_h = p_h[freqmask]
+        freqs_h = jnp.asarray(freqs_h[freqmask])
+
+        return freqs_h, p_h, segment_sizes
+
+    def get_window(self, window_func, n):
+
+        if window_func is None:
+            window = jnp.ones(n)
+
+        elif isinstance(window_func, (str, tuple)):
+            window = signal.get_window(window_func, n)
+
+        elif isinstance(window_func, Callable):
+            window = window_func(n)
+
+        window = jnp.asarray(window)
+        nenbw = n * jnp.sum(window**2) / jnp.sum(window)**2
+
+        return window, nenbw
+    
