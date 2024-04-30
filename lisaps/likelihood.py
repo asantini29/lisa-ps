@@ -25,7 +25,7 @@ class Likelihood:
                     correlated=False,
                     fullmatrix=False,
                     Nbins=1000,
-                    f_segments=1e-4,
+                    f_segments=1e-5,
                     window=('kaiser', 30),
                     noisekeys=[],
                     backgroundkeys=[],

@@ -7,6 +7,12 @@ import numpy as np
 
 from cupyx.scipy.interpolate import Akima1DInterpolator as cupy_Akima1DInterpolator
 
+import jax
+import jax.numpy as jnp
+from functools import partial
+
+jax.config.update("jax_enable_x64", True)
+
 import warnings
 
 class Psd(BaseNoise, StochasticBackgrounds):
@@ -163,22 +169,20 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
     def constmod(self, freqs,  args, **kwargs):
 
+        freqs = jnp.asarray(freqs)
         args = args[0]
-        PSDS = self.xp.empty((args.shape[0], len(freqs), self.Ncov))
-        args = np.atleast_2d(args)
+        args = jnp.atleast_2d(args)
 
-        asdTM, asdOMS = self.xp.asarray(args[:, 0:1]), self.xp.asarray(args[:, 1:2])
-        self.asdTM = asdTM
-        self.asdOMS = asdOMS
+        asdTM, asdOMS = jnp.asarray(args[:, 0:1]), jnp.asarray(args[:, 1:2])
 
-        for i, channel in enumerate(self.channels):
+        if (args.shape[1] == 2):
+            asdTM, asdOMS = jnp.asarray(args[:, 0:1]), jnp.asarray(args[:, 1:2])
 
-            if (args.shape[1] > 2) and (i > 0):
-                asdTM, asdOMS = self.xp.asarray(args[:, 2*i:2*i+1]), self.xp.asarray(args[:, 2*i+1:2*i+2])
-                self.asdTM = asdTM
-                self.asdOMS = asdOMS
+            PSDS = self.get_PSDS(asdTM, asdOMS, freqs, squeeze=False)
 
-            PSDS[:, :, i] = self.available_functions[channel](freqs)  
+        else:
+            asdTM, asdOMS = jnp.asarray(args[:, 0::2]).reshape(-1, 2), jnp.asarray(args[:, 1::2]).reshape(-1, 2)
+            PSDS = self.get_PSDS(asdTM, asdOMS, freqs, squeeze=False).reshape(-1, len(freqs), self.Ncov)
 
         return PSDS
     
@@ -349,30 +353,30 @@ class Psd(BaseNoise, StochasticBackgrounds):
         return sortedpositions, sortedweights
                 
 
-    def prepare_interp_input(self, args):
-        '''
-        here args is a list, probably of the fashion [ (edges), (knots) ] for a single channel.
-        I'd like to move away from dictionaries.
-        I want the output to be (knots position, knots weights)
-        '''
-        #breakpoint()
+    # def prepare_interp_input(self, args):
+    #     '''
+    #     here args is a list, probably of the fashion [ (edges), (knots) ] for a single channel.
+    #     I'd like to move away from dictionaries.
+    #     I want the output to be (knots position, knots weights)
+    #     '''
+    #     #breakpoint()
 
-        if len(args) == 1: # * if args is not a list it means that it is an array of weights, so it's fine
-            return self.knots, args[0]    # * if not using rj provide the knots positions to the constructor
+    #     if len(args) == 1:
+    #         return self.knots, args[0] 
         
-        else:
-            edges_weights, knots_full = self.xp.atleast_2d(self.xp.asarray(args[0])), self.xp.atleast_2d(self.xp.asarray(args[1])) #always work along the `1` axis for frequency operations
+    #     else:
+    #         edges_weights, knots_full = self.xp.atleast_2d(self.xp.asarray(args[0])), self.xp.atleast_2d(self.xp.asarray(args[1])) #always work along the `1` axis for frequency operations
 
-            idxs_sorted = np.argsort(knots_full[:, 0])
-            knots_full = knots_full[idxs_sorted]
+    #         idxs_sorted = np.argsort(knots_full[:, 0])
+    #         knots_full = knots_full[idxs_sorted]
 
-            knots_positions = knots_full[:, 0]
-            knots_weights = knots_full[:, 1:]
+    #         knots_positions = knots_full[:, 0]
+    #         knots_weights = knots_full[:, 1:]
 
-            knots = self.xp.hstack((self.logfmin, knots_positions, self.logfmax))
-            weights = self.xp.concatenate((edges_weights[:,0::2], knots_weights, edges_weights[:,1::2]), axis=0).T
+    #         knots = self.xp.hstack((self.logfmin, knots_positions, self.logfmax))
+    #         weights = self.xp.concatenate((edges_weights[:,0::2], knots_weights, edges_weights[:,1::2]), axis=0).T
 
-            return knots, weights
+    #         return knots, weights
 
     def __call__(self, freqs, noiseargs=[], backargs=[], foreargs=[], noisegroups=[], backgroups=[], foregroups=[], **kwargs):
         '''

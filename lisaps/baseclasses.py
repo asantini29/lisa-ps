@@ -767,8 +767,10 @@ class DataContainer(GPUobject):
                 d = self.dtilde
 
             d = d[self.frequencymask, :]
-            norm = 2.0 / self.df / np.sum(self.window**2)
-            Xtilde = d * np.sqrt(norm) #ALREADY NORMALIZED, refer to arXiv:2302.12573
+            norm = 1.0 / self.df / np.sum(self.window**2)
+
+            #window = np.fft.fft(self.window, n=d.shape[0])
+            Xtilde = jnp.asarray(d * np.sqrt(norm)) #ALREADY NORMALIZED, refer to arXiv:2302.12573
         return Xtilde
 
     
@@ -902,7 +904,7 @@ class DataContainer(GPUobject):
     def get_window(self, window_func, n):
 
         if window_func is None:
-            window = jnp.ones(n)
+            window = np.ones(n)
 
         elif isinstance(window_func, (str, tuple)):
             window = signal.get_window(window_func, n)
@@ -911,7 +913,7 @@ class DataContainer(GPUobject):
             window = window_func(n)
 
         window = jnp.asarray(window)
-        nenbw = n * jnp.sum(window**2) / jnp.sum(window)**2
+        nenbw = n * np.sum(window**2) / np.sum(window)**2
 
         return window, nenbw
     
