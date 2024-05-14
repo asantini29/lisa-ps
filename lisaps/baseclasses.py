@@ -583,11 +583,43 @@ class BaseNoise(GPUobject):
     #     """
     #     return jax.vmap(self.compute_PSDS, in_axes=(0, 0, None))(asdTM, asdOMS, freqs)
 
-    def set_PSDS(self, freqs, squeeze=False):
+    def set_PSDS(self, freqs, squeeze=False, out=False):
+        """
+        Sets the PSDS (Power Spectral Density Sensitivity) for the given frequencies using the stored amplitudes.
+
+        Parameters:
+        - freqs (array-like): The frequencies at which to calculate the PSDS.
+        - squeeze (bool, optional): Whether to squeeze the output arrays. Defaults to False.
+        - out (bool, optional): Whether to return the calculated PSDS. Defaults to False.
+
+        Returns:
+        - None: If `out` is False.
+        - array-like: The calculated PSDS if `out` is True.
+        """
         asdTM, asdOMS = jnp.atleast_1d(self.asdTM), jnp.atleast_1d(self.asdOMS)
         self.PSDS_design = self.get_PSDS(asdTM, asdOMS, freqs, squeeze)
+        if out:
+            return self.PSDS_design
     
     def get_PSDS(self, asdTM, asdOMS, freqs=None, squeeze=False):
+        """
+        Compute the Power Spectral Density (PSD) using the given ASDs (Amplitude Spectral Densities).
+
+        Parameters:
+        - asdTM: array-like
+            The ASD (Amplitude Spectral Density) for the TM (Test Mass) channel.
+        - asdOMS: array-like
+            The ASD (Amplitude Spectral Density) for the OMS (Optical Metrology System) channel.
+        - freqs: array-like, optional
+            The frequencies at which to compute the PSD. If not provided, the PSD will be computed at all frequencies.
+        - squeeze: bool, default False
+            Whether to squeeze the output array if it has a single dimension.
+
+        Returns:
+        - PSDS: array-like
+            The computed Power Spectral Density (PSD) values.
+
+        """
         asdTM, asdOMS = jnp.atleast_1d(asdTM), jnp.atleast_1d(asdOMS)
         if squeeze:
             return jnp.squeeze(self.compute_PSDS(asdTM, asdOMS, freqs))
@@ -634,7 +666,7 @@ class TDIresponse(GPUobject):
         self.TDIinterpolant_real = self.interp(self.freqs, self.tfs_real)
         self.TDIinterpolant_imag = self.interp(self.freqs, self.tfs_imag)
 
-    def __call__(self, freqs, return_gpu=True):
+    def __call__(self, freqs, return_jax=True, return_gpu=True):
         """
         Calculates the TDI response at the given frequencies.
         
@@ -650,10 +682,16 @@ class TDIresponse(GPUobject):
 
         response = response_real + 1j * response_imag
 
-        if not return_gpu:
-            return response.get()  # return a numpy array
+        if return_jax:
+            return jnp.asarray(response)
         else:
-            return response  # return a self.xp array
+            if return_gpu:
+                return response  # return a self.xp array
+            else:
+                try:
+                    return response.get()  # return a np array
+                except AttributeError:
+                    return response
 
 class DataContainer(GPUobject):
 
@@ -667,8 +705,8 @@ class DataContainer(GPUobject):
                 fmax=2.9e-2,
                 average=False,
                 Nbins=1000,
+                f_segments=1e-5,
                 fullmatrix=False,
-                f_segments=1e-4,
                 window=('kaiser', 30),
                 use_gpu=False,
                 ):
@@ -701,18 +739,7 @@ class DataContainer(GPUobject):
 
             self.window, self.Nbw = self.get_window(window, d.shape[0])
             
-            freqs = jnp.fft.rfftfreq(d.shape[0], self.dt)
-
-            if fmin is not None and fmax is not None:
-                self.fmin = fmin
-                self.fmax = fmax
-
-            else:
-                self.fmin = freqs.min()
-                self.fmax = freqs.max()
-
-            self.frequencymask = (freqs > self.fmin) & (freqs < self.fmax) # remove ALL the wiggles CAREFULL: we MUST find a way to include them
-            freqs = self.xp.array(freqs[self.frequencymask])
+            freqs = np.fft.rfftfreq(d.shape[0], self.dt)
 
             d_tmp = d
 
@@ -750,24 +777,23 @@ class DataContainer(GPUobject):
 
         else:
             self.freqs = freqs
-            self.dtildedtilde =self.get_XtildeXtilde(dtilde)
+            self.dtildedtilde =self.get_XtildeXtilde()
             self.nu = 1
 
     def get_Xtilde(self, d=None):
-
         if self.domain == 'time':
             if d is None:
                 d = self.d
 
-            norm = 2.0 * self.dt / np.sum(self.window**2)
-            Xtilde = jnp.asarray([np.fft.rfft(d[:, i] * self.window)[self.frequencymask] for i in range(self.nchannels)]).T * np.sqrt(norm) #ALREADY NORMALIZED, refer to arXiv:2302.12573
+            norm = 2.0 * self.dt / jnp.sum(self.window**2)
+            Xtilde = jnp.asarray([np.fft.rfft(d[:, i] * self.window)[self.frequencymask] for i in range(self.nchannels)]).T * jnp.sqrt(norm) #ALREADY NORMALIZED, refer to arXiv:2302.12573
 
         elif self.domain == 'frequency':
             if d is None:
                 d = self.dtilde
 
             d = d[self.frequencymask, :]
-            norm = 1.0 / self.df / np.sum(self.window**2)
+            norm = 2.0 * self.df
 
             #window = np.fft.fft(self.window, n=d.shape[0])
             Xtilde = jnp.asarray(d * np.sqrt(norm)) #ALREADY NORMALIZED, refer to arXiv:2302.12573
@@ -912,7 +938,6 @@ class DataContainer(GPUobject):
         elif isinstance(window_func, Callable):
             window = window_func(n)
 
-        window = jnp.asarray(window)
         nenbw = n * np.sum(window**2) / np.sum(window)**2
 
         return window, nenbw

@@ -10,6 +10,7 @@ from cupyx.scipy.interpolate import Akima1DInterpolator as cupy_Akima1DInterpola
 import jax
 import jax.numpy as jnp
 from functools import partial
+from pysco import performance
 
 jax.config.update("jax_enable_x64", True)
 
@@ -401,13 +402,13 @@ class Psd(BaseNoise, StochasticBackgrounds):
         if self.nbackgrounds > 0:
             
             try:
-                response = self.isotropicresponse[self.xp.newaxis, :, :]
+                response = self.isotropicresponse[jnp.newaxis, :, :]
             except:
                 self.set_isotropicresponse(freqs)
-                response = self.isotropicresponse[self.xp.newaxis, :, :]
+                response = self.isotropicresponse[jnp.newaxis, :, :]
                 #breakpoint()
 
-            sgwbs_all = self.xp.zeros_like(PSDS)
+            sgwbs_all = jnp.zeros_like(PSDS)
 
             for i in range(self.nbackgrounds):
                 
@@ -426,7 +427,8 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
                         h2omega = h2omega * 10**logperturbation
 
-                    h2omega = self.xp.repeat(h2omega, self.Ncov, axis=-1)
+                    #h2omega = jnp.repeat(h2omega, self.Ncov, axis=-1)
+                    #breakpoint()
                     Shs = self.convert_to_psd(freqs, h2omega)
                     #Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
                     #Shs = self.xp.array(Sh).transpose(1, 2, 0)

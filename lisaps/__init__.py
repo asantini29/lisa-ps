@@ -15,4 +15,4 @@ from .lisaps import __author__
 from .lisaps import __author_email__
 
 
-from . import akima, baseclasses, constants, likelihood, psd, stochasticbackgrounds, templates, fisher
+from . import akima, baseclasses, constants, likelihood, psd, stochasticbackgrounds, templates, utils
