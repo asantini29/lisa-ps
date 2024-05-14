@@ -218,22 +218,20 @@ class Psd(BaseNoise, StochasticBackgrounds):
             groups = [groups]
             
         nin = min([arg.shape[0] for arg in args])
-        PSDS = self.xp.empty((nin, len(freqs), self.Ncov))
+        #PSDS = self.xp.empty((nin, len(freqs), self.Ncov))
 
-        #knots, weights = self.prepare_interp_input(args=args, groups=groups)
         knots, weights = self.prepare_interp_input_numba(args=args, groups=groups)
-        
-        #breakpoint()
+   
         ftol_mask = self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1)
         ftol_mask = self.xp.broadcast_to(ftol_mask, (freqs.shape[0], self.Ncov, nin)).transpose(2, 0, 1)
-        PSDS[ftol_mask] = self.xp.nan
         
         logperturbation = self.logperturbation_numba(freqs=freqs, knots=knots, weights=weights)
+        logperturbation[ftol_mask] = self.xp.nan
 
-        #breakpoint()
-        # for j in range(logperturbation.shape[-1]):
-        #     PSDS[:, :, j] = self.PSDS_design[:, :, j] * 10**(logperturbation[:, :, j]) #* 10**(splinepert(self.xp.log10(freqs)))[None, None, :]
+        logperturbation = jnp.asarray(logperturbation)        
+
         PSDS = self.PSDS_design * 10**(logperturbation)
+
 
         return PSDS
     
