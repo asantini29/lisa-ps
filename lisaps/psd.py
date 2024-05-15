@@ -203,13 +203,12 @@ class Psd(BaseNoise, StochasticBackgrounds):
         '''
         
         if self.fitASDs:
-            self.PSDS_design = self.constmod(freqs, args[:1])    
+            PSDS = self.constmod(freqs, args[:1])    
             args = args[1:]  
             groups = groups[1:]
 
         else:
-            if self.PSDS_design is None:
-                self.set_PSDS(freqs)   
+            PSDS = self.set_PSDS(freqs, out=True)   
 
         if not isinstance(args, list):
             args = [args]
@@ -226,12 +225,16 @@ class Psd(BaseNoise, StochasticBackgrounds):
         ftol_mask = self.xp.broadcast_to(ftol_mask, (freqs.shape[0], self.Ncov, nin)).transpose(2, 0, 1)
         
         logperturbation = self.logperturbation_numba(freqs=freqs, knots=knots, weights=weights)
-        logperturbation[ftol_mask] = self.xp.nan
+        perturbation = 10**logperturbation
+        perturbation[ftol_mask] = self.xp.nan
 
-        logperturbation = jnp.asarray(logperturbation)        
+        perturbation = jnp.asarray(perturbation)        
 
-        PSDS = self.PSDS_design * 10**(logperturbation)
-
+        PSDS = PSDS * perturbation
+        #PSDS[ftol_mask] = self.xp.nan
+        #PSDS = PSDS.at[ftol_mask].set(jnp.nan)
+        
+        #breakpoint()   
 
         return PSDS
     
@@ -396,6 +399,8 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
         '''
         PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
+
+        #breakpoint()  
         
         if self.nbackgrounds > 0:
             

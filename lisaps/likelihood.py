@@ -205,8 +205,10 @@ class Likelihood:
                 ntilde = self.data.dtilde[self.xp.newaxis, :, :]
                 logl_args = []
 
-            mempool = xp.get_default_memory_pool()
-            mempool.free_all_blocks()
+            #breakpoint()
+            if self.use_gpu:
+                mempool = xp.get_default_memory_pool()
+                mempool.free_all_blocks()
 
             logl = self.compute_logl(psd, *logl_args)
             # logl = - self.xp.sum( self.xp.sum(ntildentilde / cov, axis = -1) + self.nu * xp.sum(self.xp.log(cov), axis = -1) , axis = -1)
@@ -268,6 +270,8 @@ class Likelihood:
 
     @partial(jax.jit, static_argnums=(0,))
     def whittle_logl(self, psd, *args, **kwargs):
+
+        #breakpoint()
         
         if self.fullmatrix:
             ntilde = args[0]
@@ -289,6 +293,8 @@ class Likelihood:
     
     @partial(jax.jit, static_argnums=(0,))
     def wishart_logl(self, psd, *args, **kwargs) :
+
+        #breakpoint()
 
         if self.fullmatrix:
             cov = self.get_covariance(psd)
