@@ -17,6 +17,7 @@ from functools import partial
 jax.config.update("jax_enable_x64", True)
 
 from .baseclasses import DataContainer
+from .utils import fill_diagonal, fill_lower_triangle, fill_covmat, get_matrix_determinant
 
 class Likelihood:
 
@@ -31,7 +32,7 @@ class Likelihood:
                     source_wf_gen=None,
                     nchannels=3,
                     average=False,
-                    correlated=False,
+                    hermitian=True,
                     fullmatrix=False,
                     Nbins=1000,
                     f_segments=1e-5,
@@ -74,12 +75,16 @@ class Likelihood:
         self.fmin = fmin
         self.fmax = fmax
 
+        self.fullmatrix = fullmatrix
+        self.hermitian = hermitian 
+        if self.hermitian:
+            self.solve = jax.scipy.linalg.cho_solve
+        else:
+            self.solve = jnp.linalg.solve
+
         if source_wf_gen is None: # fit only for the psd (noise, stochastic components)
             
             self.nsource_wf_gen = 0
-
-            self.correlated = correlated
-            self.fullmatrix = fullmatrix
 
             if average: # without signal we can use an averaged likelihood
                 #breakpoint()
@@ -203,6 +208,7 @@ class Likelihood:
                 
             else:
                 ntilde = self.data.dtilde[self.xp.newaxis, :, :]
+                ntildentilde = self.data.dtildedtilde
                 logl_args = []
 
             #breakpoint()
@@ -210,7 +216,7 @@ class Likelihood:
                 mempool = xp.get_default_memory_pool()
                 mempool.free_all_blocks()
 
-            logl = self.compute_logl(psd, *logl_args)
+            logl = self.compute_logl(psd, ntilde, ntildentilde)
             # logl = - self.xp.sum( self.xp.sum(ntildentilde / cov, axis = -1) + self.nu * xp.sum(self.xp.log(cov), axis = -1) , axis = -1)
 
             logl_all.append(logl)
@@ -268,63 +274,57 @@ class Likelihood:
 
         return wf_groups, noise_groups, background_groups, foreground_groups
 
-    @partial(jax.jit, static_argnums=(0,))
-    def whittle_logl(self, psd, *args, **kwargs):
 
-        #breakpoint()
-        
+    @partial(jax.jit, static_argnums=(0,))
+    def whittle_logl(self, psd, ntilde, ntildentilde):
+        """
+        Compute the log likelihood for the Whittle likelihood.
+
+        Args:
+            psd (array): The power spectral density.
+            ntilde (array): The residual data in the frequency domain.
+            ntildentilde (array): The residual data in the frequency domain times its complex conjugate traspose.
+
+        Returns:
+            array: The log likelihood.
+        """
+
         if self.fullmatrix:
-            ntilde = args[0]
-            cov = self.get_covariance(psd)
-            ntilde_rep = self.xp.repeat(ntilde, cov.shape[0], axis=0)
-            ntildeconj_invcov = self.xp.linalg.solve(cov, self.xp.conj(ntilde_rep)[:, :, :])
-            detcov = self.xp.linalg.det(cov)
-            del cov
-            ntildentilde = self.xp.einsum('ijk,ijk -> ij', ntildeconj_invcov, ntilde)
-            logl = - self.xp.sum(ntildentilde + self.xp.log(detcov), axis=-1)
+            to_solve, logdet = get_matrix_determinant(psd, hermitian=self.hermitian)
+
+            ntilde_rep = jnp.repeat(ntilde, psd.shape[0], axis=0)
+            ntildeconj_invcov = self.solve(to_solve, jnp.conj(ntilde_rep)[:, :, :])
+        
+            ntildentilde = jnp.einsum('ijk,ijk -> ij', ntildeconj_invcov, ntilde)
+            logl = - jnp.sum(ntildentilde + logdet, axis=-1)
 
         else:
             cov = psd
-            #ntildentilde = self.get_XtildeXtilde()
-            #logl = - self.xp.sum( self.data.dtildedtilde / cov + self.xp.log(cov),  axis = (1, 2))
-            logl = - jnp.sum( self.data.dtildedtilde / cov + jnp.log(cov),  axis = (1, 2))
+            logl = - jnp.sum( ntildentilde / cov + jnp.log(cov),  axis = (1, 2))
 
         return logl
     
+
     @partial(jax.jit, static_argnums=(0,))
     def wishart_logl(self, psd, *args, **kwargs) :
+        """
+        Compute the log likelihood for the Wishart likelihood. Since the Wishart likelihood is based on averaging over data segments, it cannot be used when including deterministic signals.
 
-        #breakpoint()
+        Args:
+            psd (array): The power spectral density.
+        
+        Returns:
+            array: The log likelihood.
+        """
 
         if self.fullmatrix:
-            cov = self.get_covariance(psd)
-            invcov = self.xp.linalg.inv(cov)
-            detcov = self.xp.linalg.det(cov)
+            cov, logdet = get_matrix_determinant(psd, hermitian=False)
+            invcov = jnp.linalg.inv(cov)
             del cov
 
-            return -  self.xp.sum(self.xp.einsum('...ii', self.xp.einsum('...ij, ...jk->...ik', invcov, self.data.Y)) + self.data.nu * self.xp.log(detcov), axis=-1)
+            return -  jnp.sum(jnp.einsum('...ii', jnp.einsum('...ij, ...jk->...ik', invcov, self.data.Y)) + self.data.nu * logdet, axis=-1) 
 
         else:
             cov = psd
-            #return - self.xp.sum(self.data.Y / cov + self.data.nu[None, :, None] * self.xp.log(cov), axis=(1,2)) #+ self.norm
             return - jnp.sum(self.data.Y / cov + self.data.nu[None, :, None] * jnp.log(cov), axis=(1,2)) #+ self.norm
 
-    
-    def get_covariance(self, psd):
-        #TODO need a way to write this in a JAX compatible way
-
-        nin, nfreqs = psd.shape[0], psd.shape[1]
-        covariance = self.xp.zeros(shape=(nin, nfreqs, self.nchannels, self.nchannels))
-        for i in range(self.nchannels):
-            covariance[:,:,i,i] = psd[:,:,i]
-
-        if self.correlated:
-            covariance[:,:,0,1] = psd[:,:,3]  
-            covariance[:,:,0,2] = psd[:,:,4]  
-            covariance[:,:,1,2] = psd[:,:,5]
-
-            covariance[:,:,1,0] = self.xp.conj(psd[:,:,3])
-            covariance[:,:,2,0] = self.xp.conj(psd[:,:,4])
-            covariance[:,:,2,1] = self.xp.conj(psd[:,:,5])
-
-        return covariance

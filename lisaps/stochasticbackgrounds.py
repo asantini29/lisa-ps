@@ -11,7 +11,7 @@ jax.config.update("jax_enable_x64", True)
 from functools import partial
 
 
-class StochasticBackgrounds(GPUobject):
+class StochasticContribution(GPUobject):
 
     def __init__(self, 
                  backgrounds=[], 
@@ -27,7 +27,7 @@ class StochasticBackgrounds(GPUobject):
                  correct_sagnac=True, 
                  **kwargs):
         """
-        Initialize the StochasticBackgrounds object.
+        Initialize the StochasticContribution object.
 
         Args:
             backgrounds (list): List of background types to include.

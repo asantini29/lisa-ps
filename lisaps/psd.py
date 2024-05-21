@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from .baseclasses import BaseNoise, TDIresponse
-from .stochasticbackgrounds import StochasticBackgrounds
+from .stochasticbackgrounds import StochasticContribution
 from typing import Any, Callable
 import numpy as np
 
@@ -16,7 +16,7 @@ jax.config.update("jax_enable_x64", True)
 
 import warnings
 
-class Psd(BaseNoise, StochasticBackgrounds):
+class Psd(BaseNoise, StochasticContribution):
     """
     Psd class represents the power spectral density (PSD) model for noise and stochastic backgrounds.
 
@@ -98,7 +98,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
         if not isinstance(foregrounds, list):
             foregrounds = [foregrounds]
 
-        StochasticBackgrounds.__init__(self, 
+        StochasticContribution.__init__(self, 
                                        backgrounds=backgrounds, 
                                        background_kwargs=background_kwargs, 
                                        foregrounds=foregrounds, 

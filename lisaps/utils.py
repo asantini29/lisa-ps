@@ -10,6 +10,7 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 
 from .baseclasses import BaseNoise, GPUobject
+from .stochasticbackgrounds import StochasticContribution
 
 '''
 script to compute the Fisher information matrix for a given likelihood function. for the moment, we will only consider the instrumental noise case.
@@ -239,3 +240,139 @@ class NoiseGenerator(DataGenerator):
         psd_fn = BaseNoise(**noise_kwargs).set_PSDS
 
         super().__init__(psd_fn, domain=domain, use_gpu=use_gpu)
+
+
+class SignalGenerator(DataGenerator):
+    def __init__(self, signal_kwargs, domain='frequency', use_gpu=False):
+        '''
+        Initialize the SignalGenerator class.
+
+        Args:
+        - signal_kwargs (dict): Dictionary of keyword arguments to be passed to the StochasticContribution class.
+        - domain (str, optional): The domain of the data. Must be either "frequency" or "time". Defaults to "frequency".
+        - use_gpu (bool, optional): Flag indicating whether to use GPU acceleration. Defaults to False.
+        '''
+        signal_fn = StochasticContribution(**signal_kwargs).backgrounds_fn[0]
+
+        super().__init__(signal_fn, domain=domain, use_gpu=use_gpu)
+
+
+
+
+
+
+
+
+# helper functions
+@jax.vmap
+@jax.vmap
+@jax.jit
+def fill_diagonal(x):
+    return jnp.diag(x[:3])
+            
+@jax.vmap
+@jax.vmap
+@jax.jit
+def fill_lower_triangle(x):
+    '''
+    Fill the lower triangle of a 3x3 matrix with the given values.
+    '''
+    x11, x22, x33, x12, x13, x23 = x
+
+    l11 = jnp.sqrt(x11)
+    l21 = x12 / l11
+    l31 = x13 / l11
+    l22 = jnp.sqrt(x22 - l21**2)
+    l32 = (x23 - l21 * l31) / l22
+    l33 = jnp.sqrt(x33 - l31**2 - l32**2)
+
+    return jnp.array([[l11, 0, 0], [l21, l22, 0], [l31, l32, l33]])
+
+@jax.vmap
+@jax.vmap
+@jax.jit
+def fill_upper_triangle(x):
+    '''
+    Fill the upper triangle of a 3x3 matrix with the given values.
+    '''
+    x11, x22, x33, x12, x13, x23 = x
+
+    u11 = jnp.sqrt(x11)
+    u12 = x12 / u11
+    u13 = x13 / u11
+    u22 = jnp.sqrt(x22 - u12**2)
+    u23 = (x23 - u12 * u13) / u22
+    u33 = jnp.sqrt(x33 - u13**2 - u23**2)
+
+    return jnp.array([[u11, u12, u13], [0, u22, u23], [0, 0, u33]])
+
+def get_matrix_determinant(x, hermitian=True):
+    '''
+    Calculate the parts of the covariance matrix useful for the likelihood evaluation. These are the input of the `solve` method chosen and the determinant of the covariance matrix.
+
+    Parameters:
+    - x: The input matrix.
+    - hermitian: A boolean value indicating whether the matrix is Hermitian. Default is True.
+
+    Returns:
+    If hermitian is True:
+    - (l, True): a tuple containing the lower triangle of the matrix and `True`, on the same line of `scipy.linalg.cho_factor()`.
+    - det: The determinant of the covariance matrix. 
+
+    If hermitian is False:
+    - cov: The covariance matrix obtained from x.
+    - det: The determinant of the covariance matrix.
+    '''
+
+    if hermitian:
+        l = fill_lower_triangle(x)
+        
+        logdet = logdet_from_triangle(l)
+
+        return (l, True), logdet
+
+    else:
+        cov = fill_covmat(x)
+        logdet = jnp.log(jnp.linalg.det(cov))
+
+        return cov, logdet
+    
+
+@jax.vmap
+@jax.vmap
+@jax.jit
+def fill_covmat(x):
+    '''
+    Fill a 3x3 generic covariance matrix with the given values.
+
+    Args:
+    - x (array-like): The values to fill the covariance matrix with.
+
+    Returns:
+    - covmat (array-like): The filled covariance matrix.
+    '''
+    x11, x22, x33, x12, x13, x23, x21, x31, x32 = x
+
+    return jnp.array([[x11, x12, x13], [x21, x22, x23], [x31, x32, x33]])
+
+@jax.vmap
+@jax.vmap
+@jax.jit
+def logdet_from_triangle(x):
+    
+    """
+    Compute the determinant of a 3x3 matrix given its lower triangle. 
+
+    Args:
+    - x (array-like): The values of the lower triangle of the matrix.
+
+    Returns:
+    - det (float): The determinant of the matrix.
+    """
+
+    diag = jnp.diag(x)
+    det = 2 * jnp.sum(jnp.log(diag))
+
+    return det
+
+
