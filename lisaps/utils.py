@@ -306,7 +306,7 @@ def fill_upper_triangle(x):
 
     return jnp.array([[u11, u12, u13], [0, u22, u23], [0, 0, u33]])
 
-def get_matrix_determinant(x, hermitian=True):
+def get_matrix_determinant(x, hermitian=True, return_mat=False):
     '''
     Calculate the parts of the covariance matrix useful for the likelihood evaluation. These are the input of the `solve` method chosen and the determinant of the covariance matrix.
 
@@ -326,10 +326,17 @@ def get_matrix_determinant(x, hermitian=True):
 
     if hermitian:
         l = fill_lower_triangle(x)
-        
+    
         logdet = logdet_from_triangle(l)
 
-        return (l, True), logdet
+        if return_mat:
+            u = fill_upper_triangle(x)
+            out = l @ u
+
+        else:
+            out = (l, True)
+
+        return out, logdet
 
     else:
         cov = fill_covmat(x)

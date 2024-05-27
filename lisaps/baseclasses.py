@@ -700,6 +700,7 @@ class DataContainer(GPUobject):
                 d=None,
                 freqs=None,
                 dtilde=None,
+                weights=None,
                 nchannels=3,
                 fmin=1e-4,
                 fmax=2.9e-2,
@@ -725,7 +726,7 @@ class DataContainer(GPUobject):
         if (t is None) and (freqs is not None) and (d is None) and (dtilde is not None):
             self.domain = 'frequency'
             assert (dtilde.shape[0] == freqs.shape[0]) and (dtilde.shape[1] == self.nchannels), 'Dimensionality mismatch'
-            self.df = freqs[1] - freqs[0]
+            self.df = np.concatenate(([freqs[1] - freqs[0]], np.diff(freqs)))[:, None]
 
             self.window, self.Nbw = self.get_window(None, dtilde.shape[0])
 
@@ -754,7 +755,15 @@ class DataContainer(GPUobject):
         self.frequencymask = (freqs > self.fmin) & (freqs < self.fmax) # remove ALL the wiggles CAREFULL: we MUST find a way to include them
         freqs = jnp.array(freqs[self.frequencymask])
 
-        self.dtilde = self.get_Xtilde(d_tmp)        
+        if hasattr(self, 'df'):
+            self.df = jnp.array(self.df[self.frequencymask])
+
+        self.dtilde = self.get_Xtilde(d_tmp)       
+
+        if weights is not None:
+            self.weights = jnp.asarray(weights[self.frequencymask])[None, :, :]
+        else:
+            self.weights = jnp.ones_like(self.dtilde)[None, :, :]
 
         if average: # without signal we can use an averaged likelihood
 
@@ -774,6 +783,8 @@ class DataContainer(GPUobject):
             
             #norm += self.xp.sum((self.nu - p) * p * self.xp.log(self.nu)) 
             #self.norm = norm
+
+            self.dtildedtilde = None
 
         else:
             self.freqs = freqs

@@ -29,6 +29,7 @@ class Likelihood:
                     dtilde=None,
                     fmin=1e-4,
                     fmax=2.9e-2,
+                    weights=None,
                     source_wf_gen=None,
                     nchannels=3,
                     average=False,
@@ -56,6 +57,7 @@ class Likelihood:
             d=d,
             freqs=freqs,
             dtilde=dtilde,
+            weights=weights,
             nchannels=nchannels,
             fmin=fmin,
             fmax=fmax,
@@ -108,11 +110,7 @@ class Likelihood:
         self.setup_indeces()
 
         self.inf = inf
-
         self.rj = rj
-        # if self.rj:
-        #     self.nsubset = 1
-        # else:     
         self.nsubset = nsubset
 
         @property
@@ -215,10 +213,10 @@ class Likelihood:
             if self.use_gpu:
                 mempool = xp.get_default_memory_pool()
                 mempool.free_all_blocks()
-
+            #breakpoint()
             logl = self.compute_logl(psd, ntilde, ntildentilde)
             # logl = - self.xp.sum( self.xp.sum(ntildentilde / cov, axis = -1) + self.nu * xp.sum(self.xp.log(cov), axis = -1) , axis = -1)
-
+            # breakpoint()
             logl_all.append(logl)
 
         logl_out = np.concatenate(logl_all)
@@ -290,7 +288,7 @@ class Likelihood:
         """
 
         if self.fullmatrix:
-            to_solve, logdet = get_matrix_determinant(psd, hermitian=self.hermitian)
+            to_solve, logdet = get_matrix_determinant(psd, hermitian=self.hermitian, return_mat=False)
 
             ntilde_rep = jnp.repeat(ntilde, psd.shape[0], axis=0)
             ntildeconj_invcov = self.solve(to_solve, jnp.conj(ntilde_rep)[:, :, :])
@@ -300,7 +298,7 @@ class Likelihood:
 
         else:
             cov = psd
-            logl = - jnp.sum( ntildentilde / cov + jnp.log(cov),  axis = (1, 2))
+            logl = - jnp.sum( self.data.weights * (ntildentilde / cov + jnp.log(cov)),  axis = (1, 2))
 
         return logl
     
@@ -308,7 +306,8 @@ class Likelihood:
     @partial(jax.jit, static_argnums=(0,))
     def wishart_logl(self, psd, *args, **kwargs) :
         """
-        Compute the log likelihood for the Wishart likelihood. Since the Wishart likelihood is based on averaging over data segments, it cannot be used when including deterministic signals.
+        Compute the log likelihood for the Wishart likelihood. 
+        Since the Wishart likelihood is based on averaging over data segments, it cannot be used when including deterministic signals.
 
         Args:
             psd (array): The power spectral density.
@@ -318,7 +317,7 @@ class Likelihood:
         """
 
         if self.fullmatrix:
-            cov, logdet = get_matrix_determinant(psd, hermitian=False)
+            cov, logdet = get_matrix_determinant(psd, hermitian=self.hermitian, return_mat=True)
             invcov = jnp.linalg.inv(cov)
             del cov
 
