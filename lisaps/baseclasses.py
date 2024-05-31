@@ -728,7 +728,7 @@ class DataContainer(GPUobject):
             assert (dtilde.shape[0] == freqs.shape[0]) and (dtilde.shape[1] == self.nchannels), 'Dimensionality mismatch'
             self.df = np.concatenate(([freqs[1] - freqs[0]], np.diff(freqs)))[:, None]
 
-            self.window, self.Nbw = self.get_window(None, dtilde.shape[0])
+            self.window, self.Nbw = self.get_window(None, 2 * dtilde.shape[0])
 
             d_tmp = dtilde
             self.d = None
@@ -757,7 +757,7 @@ class DataContainer(GPUobject):
             self.fmax = freqs.max()
 
         self.frequencymask = (freqs > self.fmin) & (freqs < self.fmax) # remove ALL the wiggles CAREFULL: we MUST find a way to include them
-        freqs = jnp.array(freqs[self.frequencymask])
+        freqs = jnp.real(jnp.array(freqs[self.frequencymask]))
 
         if hasattr(self, 'df'):
             self.df = jnp.array(self.df[self.frequencymask])
@@ -769,13 +769,13 @@ class DataContainer(GPUobject):
         else:
             self.weights = jnp.ones_like(self.dtilde)[None, :, :]
 
-        P = self.periodogram_matrix(self.d, self.dtilde, fs, window)
+        P = self.periodogram_matrix(self.dtilde)
 
         if average: # without signal we can use an averaged likelihood
 
             #P = self.periodogram_matrix(self.d, self.dtilde, fs, window)
-
-            self.freqs, self.P, sizes = self.smooth(P, fs, f_segments)
+            breakpoint()
+            self.freqs, self.P, sizes = self.average_periodogram(P, freqs, f_segments)
             self.nu = sizes / self.Nbw
 
             p = min(self.nchannels, 3)
@@ -796,7 +796,7 @@ class DataContainer(GPUobject):
             self.freqs = freqs
             self.dtildedtilde =self.get_XtildeXtilde()
             self.P = P
-            self.nu = 1
+            self.nu = 1.0
 
     def get_Xtilde(self, d=None):
         if self.domain == 'time':
@@ -828,8 +828,7 @@ class DataContainer(GPUobject):
             return  jnp.abs(jnp.conj(dtilde) * dtilde)[jnp.newaxis, :, :] #vectorized over axis 0
             #return self.xp.real(self.xp.conj(dtilde) * dtilde)[self.xp.newaxis, :, :] #vectorized over axis 
 
-    def periodogram_matrix(self, data_td, data_fd=None, fs=None, wd_func=('kaiser', 30)):
-        #todo fix time and frequency domains
+    def periodogram_matrix(self, data_fd):
         """
         Compute the periodogram matrix of the data.
         
@@ -849,28 +848,72 @@ class DataContainer(GPUobject):
         P : array
             The periodogram matrix of the data.
         """
-        if data_fd is not None:
-            dtilde = data_fd[:,:, None]
-        else:
-            # Get the number of data points.
-            n = data_td.shape[0]
-            
-            # Compute the window function.
-            wd, nenbw = self.get_window(wd_func, n)
-            k2 = jnp.sum(wd**2)
-            norm = jnp.sqrt(2 / (fs * k2))    
-            # Compute the periodogram matrix.
-            dtilde = (jnp.fft.fft(data_td * wd[:, None], axis=0) * norm)[:,:, None]
+        
+        dtilde = jnp.atleast_3d(data_fd)
         dtilde_conj = jnp.conj(dtilde)
 
         P = (dtilde @ dtilde_conj.transpose(0, 2, 1))
 
-        if not self.fullmatrix:
+        if not self.fullmatrix: # only the diagonal
             P = jnp.einsum('...ii->...i', P)
         
         return P
+    
+    def average_periodogram(self, P, freqs, f_seg):
+        """
+        Average the periodogram matrix over segments.
+        
+        Parameters
+        ----------
+        P : array
+            The periodogram matrix to average.
+        freqs : array
+            The frequencies of the periodogram matrix.
+        fs : float
+            The sampling frequency of the data.
+        f_seg : float
+            The segment frequency.
+            
+        Returns
+        -------
+        freqs_h : array
+            The frequencies where the averaged periodogram is computed.
+        P_avg : array
+            The averaged periodogram matrix.
+        segment_sizes : array
+            The sizes of the frequency segments.
+        """
 
-    def smooth(self, y, fs, f_seg, weights_func=None):
+        if isinstance(f_seg, float):
+            df = (freqs[1] - freqs[0])
+            # Smoothing bandwidth
+            bandwidth = int(f_seg / df)
+            # Segment frequencies
+            f_seg_arr = freqs[0::bandwidth]
+            f_seg_arr = jnp.concatenate((f_seg_arr, jnp.atleast_1d(freqs[-1])))
+        elif isinstance(f_seg, (jnp.ndarray, list)):
+            f_seg_arr = jnp.asarray(f_seg)
+        else:
+            raise TypeError("f0 should be a float or array_like")
+        
+        # Number of segments
+        n_seg = len(f_seg_arr)
+        # Indices of the segment bounds
+        i_seg = np.round(f_seg_arr / df).astype(int)
+        # Sizes of all intervals
+        segment_sizes = i_seg[1:] - i_seg[:-1]
+        # Middle frequencies
+        freqs_h = (f_seg_arr[:-1] + f_seg_arr[1:]) / 2.0
+
+        # Compute the averages over each segment
+        P_avg = jnp.array(
+            [jnp.sum(P[i_seg[j]:i_seg[j+1]], axis=0) / segment_sizes[j]
+            for j in range(n_seg-1)], dtype=P.dtype)
+        
+        return freqs_h, P_avg, segment_sizes
+       
+
+    def smooth_old(self, y, fs, f_seg, weights_func=None):
         """
         Smooth the unbiased log-periodogram data y.
         Can be either the log raw periodogram + gamma,
