@@ -65,7 +65,7 @@ class Psd(BaseNoise, StochasticContribution):
                  asdTM=2.4e-15, 
                  asdOMS=7.9e-12, 
                  fmin=1e-4, 
-                 fmax=2.5e-2, 
+                 fmax=2.9e-2, 
                  freqs=None,
                  equal_arms=False,
                  Ncov=None, 

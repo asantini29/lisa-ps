@@ -138,6 +138,7 @@ class StochasticContribution(GPUobject):
     @property
     def implemented_backgrounds(self):
         return [
+            'powerlaw',
             'sobhs',
             'cs',
             'fopt'
@@ -152,6 +153,7 @@ class StochasticContribution(GPUobject):
     @property
     def implented_classes(self):
         return {
+             'powerlaw': PowerLaw,
              'sobhs': PowerLaw,
              'cs': PowerLaw,
              'fopt': PhaseTransitions
@@ -210,6 +212,22 @@ class StochasticContribution(GPUobject):
             self.GBresponse = self.GBresponse_interp(freqs)[:, idxs]
         else:
             self.GBresponse = self.GBresponse_interp(freqs)
+
+
+    def TDI_background(self, freqs, args):
+        '''
+        Compute the background contribution to the TDI channels.
+        '''
+        h2omega = jnp.zeros(shape = (1, freqs.shape[0], 1))
+
+        for i, back in enumerate(self.backgrounds_fn):
+            h2omega += back(freqs, args[i])[:, :, None]
+
+        Sh = self.convert_to_psd(freqs, h2omega)
+
+        self.set_isotropicresponse(freqs)
+
+        return Sh * self.isotropicresponse
 
 
 

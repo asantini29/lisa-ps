@@ -17,7 +17,7 @@ from functools import partial
 jax.config.update("jax_enable_x64", True)
 
 from .baseclasses import DataContainer
-from .utils import fill_diagonal, fill_lower_triangle, fill_covmat, get_matrix_determinant
+from .utils import get_matrix_determinant
 
 class Likelihood:
 
@@ -121,7 +121,7 @@ class Likelihood:
         def tc_container(self, tc_container=[None, None, None, None]):
             self._tc_container = tc_container
 
-    def __call__(self, args, groups=None, tc_container=None,**kwargs):
+    def __call__(self, args, groups=None, **kwargs):
         '''
         TODO 
         -) check vectorization

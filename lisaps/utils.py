@@ -142,8 +142,11 @@ class DataGenerator(GPUobject):
             df = self.xp.diff(freqs)[0]
 
         psd_kwargs['freqs'] = freqs 
+ 
+        psd = self.psd_fn(*psd_args, **psd_kwargs).astype(self.xp.float64) #! working only with AET
 
-        psd = self.psd_fn(*psd_args, **psd_kwargs)
+        if len(psd.shape) > 2:
+            psd = psd[0]
 
         if normalize:
             norm = 1.0 / (4.0 * df)
@@ -252,7 +255,7 @@ class SignalGenerator(DataGenerator):
         - domain (str, optional): The domain of the data. Must be either "frequency" or "time". Defaults to "frequency".
         - use_gpu (bool, optional): Flag indicating whether to use GPU acceleration. Defaults to False.
         '''
-        signal_fn = StochasticContribution(**signal_kwargs).backgrounds_fn[0]
+        signal_fn = StochasticContribution(**signal_kwargs).TDI_background#.backgrounds_fn[0]
 
         super().__init__(signal_fn, domain=domain, use_gpu=use_gpu)
 

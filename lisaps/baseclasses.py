@@ -731,12 +731,16 @@ class DataContainer(GPUobject):
             self.window, self.Nbw = self.get_window(None, dtilde.shape[0])
 
             d_tmp = dtilde
+            self.d = None
+            fs = (freqs[1] - freqs[0]) * (2 * freqs.shape[0])
         
         if (t is not None) and (freqs is None) and (d is not None) and (dtilde is None):
             self.domain = 'time'
             assert (d.shape[0] == t.shape[0]) and (d.shape[1] == self.nchannels), 'Dimensionality mismatch'
             self.d = d
             self.dt = t[1] - t[0]
+
+            fs = 1 / self.dt
 
             self.window, self.Nbw = self.get_window(window, d.shape[0])
             
@@ -765,11 +769,13 @@ class DataContainer(GPUobject):
         else:
             self.weights = jnp.ones_like(self.dtilde)[None, :, :]
 
+        P = self.periodogram_matrix(self.d, self.dtilde, fs, window)
+
         if average: # without signal we can use an averaged likelihood
 
-            P = self.periodogram_matrix(self.d, 1/self.dt, window)
+            #P = self.periodogram_matrix(self.d, self.dtilde, fs, window)
 
-            self.freqs, self.P, sizes = self.smooth(P, 1/self.dt, f_segments)
+            self.freqs, self.P, sizes = self.smooth(P, fs, f_segments)
             self.nu = sizes / self.Nbw
 
             p = min(self.nchannels, 3)
@@ -789,6 +795,7 @@ class DataContainer(GPUobject):
         else:
             self.freqs = freqs
             self.dtildedtilde =self.get_XtildeXtilde()
+            self.P = P
             self.nu = 1
 
     def get_Xtilde(self, d=None):
@@ -821,14 +828,17 @@ class DataContainer(GPUobject):
             return  jnp.abs(jnp.conj(dtilde) * dtilde)[jnp.newaxis, :, :] #vectorized over axis 0
             #return self.xp.real(self.xp.conj(dtilde) * dtilde)[self.xp.newaxis, :, :] #vectorized over axis 
 
-    def periodogram_matrix(self, data, fs, wd_func=('kaiser', 30)):
+    def periodogram_matrix(self, data_td, data_fd=None, fs=None, wd_func=('kaiser', 30)):
+        #todo fix time and frequency domains
         """
         Compute the periodogram matrix of the data.
         
         Parameters
         ----------
-        data : array
-            The data to compute the periodogram matrix of.
+        data_td : array
+            The data in time domain to compute the periodogram matrix of.
+        data_fd : array
+            The data in frequency domain to compute the periodogram matrix of.
         fs : float
             The sampling frequency of the data.
         wd_func : function
@@ -839,16 +849,18 @@ class DataContainer(GPUobject):
         P : array
             The periodogram matrix of the data.
         """
-        
-        # Get the number of data points.
-        n = data.shape[0]
-        
-        # Compute the window function.
-        wd, nenbw = self.get_window(wd_func, n)
-        k2 = jnp.sum(wd**2)
-        norm = jnp.sqrt(2 / (fs * k2))    
-        # Compute the periodogram matrix.
-        dtilde = (jnp.fft.fft(data * wd[:, None], axis=0) * norm)[:,:, None]
+        if data_fd is not None:
+            dtilde = data_fd[:,:, None]
+        else:
+            # Get the number of data points.
+            n = data_td.shape[0]
+            
+            # Compute the window function.
+            wd, nenbw = self.get_window(wd_func, n)
+            k2 = jnp.sum(wd**2)
+            norm = jnp.sqrt(2 / (fs * k2))    
+            # Compute the periodogram matrix.
+            dtilde = (jnp.fft.fft(data_td * wd[:, None], axis=0) * norm)[:,:, None]
         dtilde_conj = jnp.conj(dtilde)
 
         P = (dtilde @ dtilde_conj.transpose(0, 2, 1))
