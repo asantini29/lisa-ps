@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-from abc import ABC, abstractmethod, abstractproperty
+from abc import ABC, abstractmethod
 from typing import Any, Callable
 from .baseclasses import GPUobject, TDIresponse
 from .constants import *
 import numpy as np
+
+import warnings
 
 import jax
 import jax.numpy as jnp
@@ -179,6 +181,8 @@ class StochasticContribution(GPUobject):
 
             else:
                 raise ValueError('TDIsetup not recognized. Choose between AET and XYZ')
+
+            warnings.warn('Using default TDI response files to build up an interpolant. They hold only in the interval [3e-5. 5.9e-2] Hz.')
 
         if isinstance(response, (str, list)):
             responseinterp = TDIresponse(filename=response, use_gpu=self.use_gpu)
