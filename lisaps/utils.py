@@ -143,7 +143,7 @@ class DataGenerator(GPUobject):
 
         psd_kwargs['freqs'] = freqs 
  
-        psd = self.psd_fn(*psd_args, **psd_kwargs).astype(self.xp.float64) #! working only with AET
+        psd = self.xp.real(self.psd_fn(*psd_args, **psd_kwargs))#.astype(self.xp.float64) #! working only with AET
 
         if len(psd.shape) > 2:
             psd = psd[0]

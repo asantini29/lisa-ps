@@ -732,15 +732,12 @@ class DataContainer(GPUobject):
 
             d_tmp = dtilde
             self.d = None
-            fs = (freqs[1] - freqs[0]) * (2 * freqs.shape[0])
         
         if (t is not None) and (freqs is None) and (d is not None) and (dtilde is None):
             self.domain = 'time'
             assert (d.shape[0] == t.shape[0]) and (d.shape[1] == self.nchannels), 'Dimensionality mismatch'
             self.d = d
             self.dt = t[1] - t[0]
-
-            fs = 1 / self.dt
 
             self.window, self.Nbw = self.get_window(window, d.shape[0])
             
@@ -756,35 +753,32 @@ class DataContainer(GPUobject):
             self.fmin = freqs.min()
             self.fmax = freqs.max()
 
-        self.frequencymask = (freqs > self.fmin) & (freqs < self.fmax) # remove ALL the wiggles CAREFULL: we MUST find a way to include them
-        freqs = jnp.real(jnp.array(freqs[self.frequencymask]))
 
-        if hasattr(self, 'df'):
-            self.df = jnp.array(self.df[self.frequencymask])
-
-        self.dtilde = self.get_Xtilde(d_tmp)       
-
-        if weights is not None:
-            self.weights = jnp.asarray(weights[self.frequencymask])[None, :, :]
-        else:
-            self.weights = jnp.ones_like(self.dtilde)[None, :, :]
-
+        self.dtilde = self.get_Xtilde(d_tmp)   
         P = self.periodogram_matrix(self.dtilde)
 
         if average: # without signal we can use an averaged likelihood
 
-            #P = self.periodogram_matrix(self.d, self.dtilde, fs, window)
-            breakpoint()
-            self.freqs, self.P, sizes = self.average_periodogram(P, freqs, f_segments)
-            self.nu = sizes / self.Nbw
+            freqs, P, sizes = self.average_periodogram(P, freqs, f_segments)
+
+            self.frequencymask = (freqs > self.fmin) & (freqs < self.fmax) # remove ALL the wiggles CAREFULL: we MUST find a way to include them
+            self.freqs = jnp.real(jnp.array(freqs[self.frequencymask]))
+
+            if hasattr(self, 'df'):
+                self.df = np.concatenate(([freqs[1] - freqs[0]], np.diff(freqs)))[self.frequencymask, None]
+
+            self.periodgram = P[self.frequencymask]
+            self.sizes = sizes[self.frequencymask]
+
+            self.nu = self.sizes / self.Nbw
 
             p = min(self.nchannels, 3)
 
             if self.fullmatrix:
-                self.Y = self.nu[None, :, None, None] * self.P[None, :, :, :]
+                self.Y = self.nu[None, :, None, None] * self.periodgram[None, :, :, :]
                 #norm = self.xp.sum((self.nu - p) * self.xp.log(self.xp.linalg.det(self.Y)).real) # p = # of channels
             else:
-                self.Y = self.nu[None, :, None] * self.P[None, :, :]
+                self.Y = self.nu[None, :, None] * self.periodgram[None, :, :]
                 #norm = self.xp.sum((self.nu - p) * self.xp.sum(self.xp.log(self.Y), axis=-1)) # p = # of channels
             
             #norm += self.xp.sum((self.nu - p) * p * self.xp.log(self.nu)) 
@@ -793,10 +787,19 @@ class DataContainer(GPUobject):
             self.dtildedtilde = None
 
         else:
-            self.freqs = freqs
-            self.dtildedtilde =self.get_XtildeXtilde()
-            self.P = P
+            self.frequencymask = (freqs > self.fmin) & (freqs < self.fmax)
+            self.freqs = freqs[self.frequencymask]
+            if hasattr(self, 'df'): 
+                self.df = self.df[self.frequencymask]
+            self.dtildedtilde =self.get_XtildeXtilde()[:, self.frequencymask, :]
+            self.dtilde = self.dtilde[self.frequencymask, :]
+            self.periodgram = P[self.frequencymask]
             self.nu = 1.0
+
+        if weights is not None:
+            self.weights = jnp.asarray(weights[self.frequencymask])[None, :, :]
+        else:
+            self.weights = jnp.ones_like(self.dtilde)[None, :, :]
 
     def get_Xtilde(self, d=None):
         if self.domain == 'time':
@@ -804,13 +807,13 @@ class DataContainer(GPUobject):
                 d = self.d
 
             norm = 2.0 * self.dt / jnp.sum(self.window**2)
-            Xtilde = jnp.asarray([np.fft.rfft(d[:, i] * self.window)[self.frequencymask] for i in range(self.nchannels)]).T * jnp.sqrt(norm) #ALREADY NORMALIZED, refer to arXiv:2302.12573
+            Xtilde = jnp.asarray([np.fft.rfft(d[:, i] * self.window) for i in range(self.nchannels)]).T * jnp.sqrt(norm) #ALREADY NORMALIZED, refer to arXiv:2302.12573
 
         elif self.domain == 'frequency':
             if d is None:
                 d = self.dtilde
 
-            d = d[self.frequencymask, :]
+            #d = d[self.frequencymask, :]
             norm = 2.0 * self.df
 
             #window = np.fft.fft(self.window, n=d.shape[0])
@@ -858,7 +861,50 @@ class DataContainer(GPUobject):
             P = jnp.einsum('...ii->...i', P)
         
         return P
+    '''
     
+    def periodogram_matrix(self, data_td, data_fd=None, fs=None, wd_func=('kaiser', 30)):
+        #todo fix time and frequency domains
+        """
+        Compute the periodogram matrix of the data.
+        
+        Parameters
+        ----------
+        data_td : array
+            The data in time domain to compute the periodogram matrix of.
+        data_fd : array
+            The data in frequency domain to compute the periodogram matrix of.
+        fs : float
+            The sampling frequency of the data.
+        wd_func : function
+            The window function to apply to the data.
+            
+        Returns
+        -------
+        P : array
+            The periodogram matrix of the data.
+        """
+        if data_fd is not None:
+            dtilde = data_fd[:,:, None]
+        else:
+            # Get the number of data points.
+            n = data_td.shape[0]
+            
+            # Compute the window function.
+            wd, nenbw = self.get_window(wd_func, n)
+            k2 = jnp.sum(wd**2)
+            norm = jnp.sqrt(2 / (fs * k2))    
+            # Compute the periodogram matrix.
+            dtilde = (jnp.fft.fft(data_td * wd[:, None], axis=0) * norm)[:,:, None]
+        dtilde_conj = jnp.conj(dtilde)
+
+        P = (dtilde @ dtilde_conj.transpose(0, 2, 1))
+
+        if not self.fullmatrix:
+            P = jnp.einsum('...ii->...i', P)
+
+        return P
+    '''
     def average_periodogram(self, P, freqs, f_seg):
         """
         Average the periodogram matrix over segments.
