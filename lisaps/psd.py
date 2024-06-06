@@ -425,12 +425,15 @@ class Psd(BaseNoise, StochasticContribution):
 
                         bknots, bweights = self.prepare_interp_input_numba(backargs[self.nbackgrounds+2*i:self.nbackgrounds+2*(i+1)], backgroups[self.nbackgrounds+2*i:self.nbackgrounds+2*(i+1)])
 
-                        ftol_mask = self.xp.any(self.xp.abs(self.xp.diff(bknots)) < self.ftol, axis=-1)
-                        ftol_mask = self.xp.broadcast_to(ftol_mask, (freqs.shape[0], self.Ncov, PSDS.shape[0])).transpose(2, 0, 1)
+                        ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(bknots)) < self.ftol, axis=-1), axis=0)
                         
                         logperturbation = self.logperturbation_numba(freqs=freqs, knots=bknots, weights=bweights)
+                       
+                        perturbation = 10**logperturbation
+                        perturbation[ftol_mask] = self.xp.nan
+                        perturbation = jnp.asarray(perturbation)        
 
-                        h2omega = h2omega * 10**logperturbation
+                        h2omega = h2omega * perturbation
 
                     #h2omega = jnp.repeat(h2omega, self.Ncov, axis=-1)
                     #breakpoint()
