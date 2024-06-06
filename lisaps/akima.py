@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 try:
     import cupy as xp
-    from cupy.cuda import function
     from numba import cuda
     cuda_available = True
+
 except (ModuleNotFoundError, ImportError):
     import numpy as xp
     import numba
@@ -189,14 +189,16 @@ else:
                     result[special_index] = p0 + p1 * (x_new[i] - x[idx]) + p2 * (x_new[i] - x[idx])**2 + p3 * (x_new[i] - x[idx])**3
 
 class AkimaInterpolant():
-    def __init__(self, ndim_out=2, threadsperblock = 64):
+    def __init__(self, use_gpu=True, threadsperblock = 64):
 
         # TODO: add flexibility in output shape
 
-        self.ndim_out = ndim_out
         self.threadsperblock = threadsperblock
-        self.xp = xp            
-        self.evaluate = self.evaluate_gpu if cuda_available else self.evaluate_cpu
+        self.xp = xp  
+        if use_gpu and cuda_available:
+            self.evaluate = self.evaluate_gpu
+        else:
+            self.evaluate = self.evaluate_cpu
 
     @property
     def use_numba(self):

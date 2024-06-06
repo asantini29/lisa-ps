@@ -22,6 +22,7 @@ class StochasticContribution(GPUobject):
                  foreground_kwargs={}, 
                  use_gpu=False, 
                  TDIsetup='AET', 
+                 equal_arms=False,
                  isotropicresponse=None, 
                  GBresponse=None, 
                  channels=None, 
@@ -69,6 +70,7 @@ class StochasticContribution(GPUobject):
         self.nbackgrounds = len(backgrounds)
 
         self.TDIsetup = TDIsetup
+        self.equal_arms = equal_arms
 
         if channels is not None:
             self.channels = channels
@@ -174,10 +176,16 @@ class StochasticContribution(GPUobject):
         if response is None: #use default files
             TFdir = '/data/asantini/packages/lisa-ps/utils/'
 
+            if self.equal_arms: #assume constant equal armlengths
+                files = ['TDItransferfunction_AET_equal.csv', 'TDItransferfunction_AET_equal_nosagnac.csv', 'TDItransferfunction_XYZreal_equal.csv', 'TDItransferfunction_XYZimag_equal.csv']
+            
+            else: #assume average armlengths
+                files = ['TDItransferfunction_AET.csv', 'TDItransferfunction_AET_nosagnac.csv', 'TDItransferfunction_XYZreal.csv', 'TDItransferfunction_XYZimag.csv']
+
             if self.TDIsetup == 'AET':
-                response = TFdir + 'TDItransferfunction_AET.csv' if self.correct_sagnac else TFdir + 'TDItransferfunction_AET_nosagnac.csv'
+                response = TFdir + files[0] if self.correct_sagnac else TFdir + files[1]
             elif self.TDIsetup == 'XYZ':
-                response = [TFdir + 'TDItransferfunction_XYZreal.csv', TFdir + 'TDItransferfunction_XYZimag.csv']
+                response = [TFdir + files[2], TFdir + files[3]]
 
             else:
                 raise ValueError('TDIsetup not recognized. Choose between AET and XYZ')

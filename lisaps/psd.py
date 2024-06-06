@@ -104,6 +104,7 @@ class Psd(BaseNoise, StochasticContribution):
                                        foregrounds=foregrounds, 
                                        foreground_kwargs=foreground_kwargs, 
                                        TDIsetup=self.TDIsetup,
+                                       equal_arms=equal_arms,
                                        isotropicresponse=isotropicresponse, 
                                        GBresponse=GBresponse, 
                                        channels=self.channels, 
