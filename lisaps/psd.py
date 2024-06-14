@@ -1,15 +1,22 @@
 # -*- coding: utf-8 -*-
 
 from .baseclasses import BaseNoise, TDIresponse
-from .stochasticbackgrounds import StochasticBackgrounds
+from .stochasticbackgrounds import StochasticContribution
 from typing import Any, Callable
 import numpy as np
 
 from cupyx.scipy.interpolate import Akima1DInterpolator as cupy_Akima1DInterpolator
 
+import jax
+import jax.numpy as jnp
+from functools import partial
+from pysco import performance
+
+jax.config.update("jax_enable_x64", True)
+
 import warnings
 
-class Psd(BaseNoise, StochasticBackgrounds):
+class Psd(BaseNoise, StochasticContribution):
     """
     Psd class represents the power spectral density (PSD) model for noise and stochastic backgrounds.
 
@@ -58,7 +65,7 @@ class Psd(BaseNoise, StochasticBackgrounds):
                  asdTM=2.4e-15, 
                  asdOMS=7.9e-12, 
                  fmin=1e-4, 
-                 fmax=2.5e-2, 
+                 fmax=2.9e-2, 
                  freqs=None,
                  equal_arms=False,
                  Ncov=None, 
@@ -91,12 +98,13 @@ class Psd(BaseNoise, StochasticBackgrounds):
         if not isinstance(foregrounds, list):
             foregrounds = [foregrounds]
 
-        StochasticBackgrounds.__init__(self, 
+        StochasticContribution.__init__(self, 
                                        backgrounds=backgrounds, 
                                        background_kwargs=background_kwargs, 
                                        foregrounds=foregrounds, 
                                        foreground_kwargs=foreground_kwargs, 
                                        TDIsetup=self.TDIsetup,
+                                       equal_arms=equal_arms,
                                        isotropicresponse=isotropicresponse, 
                                        GBresponse=GBresponse, 
                                        channels=self.channels, 
@@ -163,22 +171,20 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
     def constmod(self, freqs,  args, **kwargs):
 
+        freqs = jnp.asarray(freqs)
         args = args[0]
-        PSDS = self.xp.empty((args.shape[0], len(freqs), self.Ncov))
-        args = np.atleast_2d(args)
+        args = jnp.atleast_2d(args)
 
-        asdTM, asdOMS = self.xp.asarray(args[:, 0:1]), self.xp.asarray(args[:, 1:2])
-        self.asdTM = asdTM
-        self.asdOMS = asdOMS
+        asdTM, asdOMS = jnp.asarray(args[:, 0:1]), jnp.asarray(args[:, 1:2])
 
-        for i, channel in enumerate(self.channels):
+        if (args.shape[1] == 2):
+            asdTM, asdOMS = jnp.asarray(args[:, 0:1]), jnp.asarray(args[:, 1:2])
 
-            if (args.shape[1] > 2) and (i > 0):
-                asdTM, asdOMS = self.xp.asarray(args[:, 2*i:2*i+1]), self.xp.asarray(args[:, 2*i+1:2*i+2])
-                self.asdTM = asdTM
-                self.asdOMS = asdOMS
+            PSDS = self.get_PSDS(asdTM, asdOMS, freqs, squeeze=False)
 
-            PSDS[:, :, i] = self.available_functions[channel](freqs)  
+        else:
+            asdTM, asdOMS = jnp.asarray(args[:, 0::2]).reshape(-1, 2), jnp.asarray(args[:, 1::2]).reshape(-1, 2)
+            PSDS = self.get_PSDS(asdTM, asdOMS, freqs, squeeze=False).reshape(-1, len(freqs), self.Ncov)
 
         return PSDS
     
@@ -198,13 +204,12 @@ class Psd(BaseNoise, StochasticBackgrounds):
         '''
         
         if self.fitASDs:
-            self.PSDS_design = self.constmod(freqs, args[:1])    
+            PSDS = self.constmod(freqs, args[:1])    
             args = args[1:]  
             groups = groups[1:]
 
         else:
-            if self.PSDS_design is None:
-                self.set_PSDS(freqs)   
+            PSDS = self.set_PSDS(freqs, out=True)   
 
         if not isinstance(args, list):
             args = [args]
@@ -213,24 +218,26 @@ class Psd(BaseNoise, StochasticBackgrounds):
             groups = [groups]
             
         nin = min([arg.shape[0] for arg in args])
-        PSDS = self.xp.empty((nin, len(freqs), self.Ncov))
+        #PSDS = self.xp.empty((nin, len(freqs), self.Ncov))
 
-        #knots, weights = self.prepare_interp_input(args=args, groups=groups)
         knots, weights = self.prepare_interp_input_numba(args=args, groups=groups)
-        
-        #breakpoint()
-        ftol_mask = self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1)
-        ftol_mask = self.xp.broadcast_to(ftol_mask, (freqs.shape[0], self.Ncov, nin)).transpose(2, 0, 1)
-        #PSDS[ftol_mask] = self.xp.nan
+        # breakpoint()
+        # ftol_mask = self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1)
+        # ftol_mask = self.xp.broadcast_to(ftol_mask, (freqs.shape[0], self.Ncov, nin)).transpose(2, 0, 1)
+
+        ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1), axis=0)
         
         logperturbation = self.logperturbation_numba(freqs=freqs, knots=knots, weights=weights)
+        perturbation = 10**logperturbation
+        perturbation[ftol_mask] = self.xp.nan
 
-        #breakpoint()
-        # for j in range(logperturbation.shape[-1]):
-        #     PSDS[:, :, j] = self.PSDS_design[:, :, j] * 10**(logperturbation[:, :, j]) #* 10**(splinepert(self.xp.log10(freqs)))[None, None, :]
-        PSDS = self.PSDS_design * 10**(logperturbation)
+        perturbation = jnp.asarray(perturbation)        
 
-        PSDS[ftol_mask] = self.xp.nan
+        PSDS = PSDS * perturbation
+        #PSDS[ftol_mask] = self.xp.nan
+        #PSDS = PSDS.at[ftol_mask].set(jnp.nan)
+        
+        #breakpoint()   
 
         return PSDS
     
@@ -351,30 +358,30 @@ class Psd(BaseNoise, StochasticBackgrounds):
         return sortedpositions, sortedweights
                 
 
-    def prepare_interp_input(self, args):
-        '''
-        here args is a list, probably of the fashion [ (edges), (knots) ] for a single channel.
-        I'd like to move away from dictionaries.
-        I want the output to be (knots position, knots weights)
-        '''
-        #breakpoint()
+    # def prepare_interp_input(self, args):
+    #     '''
+    #     here args is a list, probably of the fashion [ (edges), (knots) ] for a single channel.
+    #     I'd like to move away from dictionaries.
+    #     I want the output to be (knots position, knots weights)
+    #     '''
+    #     #breakpoint()
 
-        if len(args) == 1: # * if args is not a list it means that it is an array of weights, so it's fine
-            return self.knots, args[0]    # * if not using rj provide the knots positions to the constructor
+    #     if len(args) == 1:
+    #         return self.knots, args[0] 
         
-        else:
-            edges_weights, knots_full = self.xp.atleast_2d(self.xp.asarray(args[0])), self.xp.atleast_2d(self.xp.asarray(args[1])) #always work along the `1` axis for frequency operations
+    #     else:
+    #         edges_weights, knots_full = self.xp.atleast_2d(self.xp.asarray(args[0])), self.xp.atleast_2d(self.xp.asarray(args[1])) #always work along the `1` axis for frequency operations
 
-            idxs_sorted = np.argsort(knots_full[:, 0])
-            knots_full = knots_full[idxs_sorted]
+    #         idxs_sorted = np.argsort(knots_full[:, 0])
+    #         knots_full = knots_full[idxs_sorted]
 
-            knots_positions = knots_full[:, 0]
-            knots_weights = knots_full[:, 1:]
+    #         knots_positions = knots_full[:, 0]
+    #         knots_weights = knots_full[:, 1:]
 
-            knots = self.xp.hstack((self.logfmin, knots_positions, self.logfmax))
-            weights = self.xp.concatenate((edges_weights[:,0::2], knots_weights, edges_weights[:,1::2]), axis=0).T
+    #         knots = self.xp.hstack((self.logfmin, knots_positions, self.logfmax))
+    #         weights = self.xp.concatenate((edges_weights[:,0::2], knots_weights, edges_weights[:,1::2]), axis=0).T
 
-            return knots, weights
+    #         return knots, weights
 
     def __call__(self, freqs, noiseargs=[], backargs=[], foreargs=[], noisegroups=[], backgroups=[], foregroups=[], **kwargs):
         '''
@@ -396,51 +403,18 @@ class Psd(BaseNoise, StochasticBackgrounds):
         '''
         PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
 
-        '''
-        #* put here the if, hopefully it will be more flexible (but probably slower)
-        if self.fitASDs:
-            self.PSDS_design = self.constmod(freqs, noiseargs[:1])    
-            noiseargs = noiseargs[1:]  
-            noisegroups = noisegroups[1:]
-
-        else:
-            if self.PSDS_design is None:
-                self.set_PSDS(freqs)   
-
-        if self.noiseperturbation:
-            if not isinstance(noiseargs, list):
-                noiseargs = [noiseargs]
-        
-            if not isinstance(noisegroups, list):
-                noisegroups = [noisegroups]
-                
-            nin = min([arg.shape[0] for arg in noiseargs])
-            PSDS = self.xp.empty((nin, len(freqs), self.Ncov))
-
-            knots, weights = self.prepare_interp_input_numba(args=noiseargs, groups=noisegroups)
-            
-            ftol_mask = self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1)
-            ftol_mask = self.xp.broadcast_to(ftol_mask, (freqs.shape[0], self.Ncov, nin)).transpose(2, 0, 1)
-            PSDS[ftol_mask] = self.xp.nan
-            
-            logperturbation = self.logperturbation_numba(freqs=freqs, knots=knots, weights=weights)
-
-            PSDS = self.PSDS_design * 10**(logperturbation)
-
-        else:
-            PSDS = self.PSDS_design
-        '''
+        #breakpoint()  
         
         if self.nbackgrounds > 0:
             
             try:
-                response = self.isotropicresponse[self.xp.newaxis, :, :]
+                response = self.isotropicresponse[jnp.newaxis, :, :]
             except:
                 self.set_isotropicresponse(freqs)
-                response = self.isotropicresponse[self.xp.newaxis, :, :]
+                response = self.isotropicresponse[jnp.newaxis, :, :]
                 #breakpoint()
 
-            sgwbs_all = self.xp.zeros_like(PSDS)
+            sgwbs_all = jnp.zeros_like(PSDS)
 
             for i in range(self.nbackgrounds):
                 
@@ -452,14 +426,18 @@ class Psd(BaseNoise, StochasticBackgrounds):
 
                         bknots, bweights = self.prepare_interp_input_numba(backargs[self.nbackgrounds+2*i:self.nbackgrounds+2*(i+1)], backgroups[self.nbackgrounds+2*i:self.nbackgrounds+2*(i+1)])
 
-                        ftol_mask = self.xp.any(self.xp.abs(self.xp.diff(bknots)) < self.ftol, axis=-1)
-                        ftol_mask = self.xp.broadcast_to(ftol_mask, (freqs.shape[0], self.Ncov, PSDS.shape[0])).transpose(2, 0, 1)
+                        ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(bknots)) < self.ftol, axis=-1), axis=0)
                         
                         logperturbation = self.logperturbation_numba(freqs=freqs, knots=bknots, weights=bweights)
+                       
+                        perturbation = 10**logperturbation
+                        perturbation[ftol_mask] = self.xp.nan
+                        perturbation = jnp.asarray(perturbation)        
 
-                        h2omega = h2omega * 10**logperturbation
+                        h2omega = h2omega * perturbation
 
-                    h2omega = self.xp.repeat(h2omega, self.Ncov, axis=-1)
+                    #h2omega = jnp.repeat(h2omega, self.Ncov, axis=-1)
+                    #breakpoint()
                     Shs = self.convert_to_psd(freqs, h2omega)
                     #Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
                     #Shs = self.xp.array(Sh).transpose(1, 2, 0)

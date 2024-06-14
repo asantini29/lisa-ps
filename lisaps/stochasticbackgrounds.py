@@ -1,12 +1,19 @@
 # -*- coding: utf-8 -*-
-from abc import ABC, abstractmethod, abstractproperty
+from abc import ABC, abstractmethod
 from typing import Any, Callable
 from .baseclasses import GPUobject, TDIresponse
 from .constants import *
 import numpy as np
 
+import warnings
 
-class StochasticBackgrounds(GPUobject):
+import jax
+import jax.numpy as jnp
+jax.config.update("jax_enable_x64", True)
+from functools import partial
+
+
+class StochasticContribution(GPUobject):
 
     def __init__(self, 
                  backgrounds=[], 
@@ -15,6 +22,7 @@ class StochasticBackgrounds(GPUobject):
                  foreground_kwargs={}, 
                  use_gpu=False, 
                  TDIsetup='AET', 
+                 equal_arms=False,
                  isotropicresponse=None, 
                  GBresponse=None, 
                  channels=None, 
@@ -22,7 +30,7 @@ class StochasticBackgrounds(GPUobject):
                  correct_sagnac=True, 
                  **kwargs):
         """
-        Initialize the StochasticBackgrounds object.
+        Initialize the StochasticContribution object.
 
         Args:
             backgrounds (list): List of background types to include.
@@ -62,6 +70,7 @@ class StochasticBackgrounds(GPUobject):
         self.nbackgrounds = len(backgrounds)
 
         self.TDIsetup = TDIsetup
+        self.equal_arms = equal_arms
 
         if channels is not None:
             self.channels = channels
@@ -100,13 +109,14 @@ class StochasticBackgrounds(GPUobject):
         if self.units == 'hertz':
             self._conversion = CENTRAL_FREQ**2
         elif self.units == 'meters':
-            self._conversion = 1 / ( (2 * self.xp.pi * freqs) / C)**2 
+            self._conversion = 1 / ( (2 * jnp.pi * freqs) / C)**2 
         elif self.units == 'strain':
             self._conversion = 1 
 
+    @partial(jax.jit, static_argnums=(0,))
     def convert_to_psd(self, freqs, h2omega):
         
-        Sh = h2omega * (3 * H0h**2 / (4 * self.xp.pi**2 * freqs[None, :, None]**3)) * (2 * self.xp.pi) #strain units
+        Sh = h2omega * (3 * H0h**2 / (4 * jnp.pi**2 * freqs[None, :, None]**3)) * (2 * jnp.pi) #strain units
         if not hasattr(self, '_conversion'):
             self.conversion = freqs
         return Sh * self.conversion
@@ -132,6 +142,7 @@ class StochasticBackgrounds(GPUobject):
     @property
     def implemented_backgrounds(self):
         return [
+            'powerlaw',
             'sobhs',
             'cs',
             'fopt'
@@ -146,6 +157,7 @@ class StochasticBackgrounds(GPUobject):
     @property
     def implented_classes(self):
         return {
+             'powerlaw': PowerLaw,
              'sobhs': PowerLaw,
              'cs': PowerLaw,
              'fopt': PhaseTransitions
@@ -154,9 +166,9 @@ class StochasticBackgrounds(GPUobject):
     @property
     def injection(self):
         return {
-            'sobhs': self.xp.array([3.4e-13, 2/3]),
-            'cs': self.xp.array([5.5e-12, 0]),
-            'fopt': self.xp.array([4.22e-12, 9.86e-4, 2.88e-14, 200])
+            'sobhs': jnp.array([3.4e-13, 2/3]),
+            'cs': jnp.array([5.5e-12, 0]),
+            'fopt': jnp.array([4.22e-12, 9.86e-4, 2.88e-14, 200])
         }
     
     def set_responseinterp(self, response):
@@ -164,13 +176,21 @@ class StochasticBackgrounds(GPUobject):
         if response is None: #use default files
             TFdir = '/data/asantini/packages/lisa-ps/utils/'
 
+            if self.equal_arms: #assume constant equal armlengths
+                files = ['TDItransferfunction_AET_equal.csv', 'TDItransferfunction_AET_equal_nosagnac.csv', 'TDItransferfunction_XYZreal_equal.csv', 'TDItransferfunction_XYZimag_equal.csv']
+            
+            else: #assume average armlengths
+                files = ['TDItransferfunction_AET.csv', 'TDItransferfunction_AET_nosagnac.csv', 'TDItransferfunction_XYZreal.csv', 'TDItransferfunction_XYZimag.csv']
+
             if self.TDIsetup == 'AET':
-                response = TFdir + 'TDItransferfunction_AET.csv' if self.correct_sagnac else TFdir + 'TDItransferfunction_AET_nosagnac.csv'
+                response = TFdir + files[0] if self.correct_sagnac else TFdir + files[1]
             elif self.TDIsetup == 'XYZ':
-                response = [TFdir + 'TDItransferfunction_XYZreal.csv', TFdir + 'TDItransferfunction_XYZimag.csv']
+                response = [TFdir + files[2], TFdir + files[3]]
 
             else:
                 raise ValueError('TDIsetup not recognized. Choose between AET and XYZ')
+
+            warnings.warn('Using default TDI response files to build up an interpolant. They hold only in the interval [3e-5. 5.9e-2] Hz.')
 
         if isinstance(response, (str, list)):
             responseinterp = TDIresponse(filename=response, use_gpu=self.use_gpu)
@@ -180,8 +200,7 @@ class StochasticBackgrounds(GPUobject):
         
         else: 
             raise ValueError('if fitting for a background provide the TDI response as well. Provide either the file for the interpolation \
-                                or a callable to be evaluated on a custom range of frequencies'
-                )
+                                or a callable to be evaluated on a custom range of frequencies')
 
         return responseinterp
 
@@ -205,6 +224,22 @@ class StochasticBackgrounds(GPUobject):
             self.GBresponse = self.GBresponse_interp(freqs)[:, idxs]
         else:
             self.GBresponse = self.GBresponse_interp(freqs)
+
+
+    def TDI_background(self, freqs, args):
+        '''
+        Compute the background contribution to the TDI channels.
+        '''
+        h2omega = jnp.zeros(shape = (1, freqs.shape[0], 1))
+
+        for i, back in enumerate(self.backgrounds_fn):
+            h2omega += back(freqs, args[i])[:, :, None]
+
+        Sh = self.convert_to_psd(freqs, h2omega)
+
+        self.set_isotropicresponse(freqs)
+
+        return Sh * self.isotropicresponse
 
 
 
@@ -250,12 +285,19 @@ class PowerLaw(EnergyDensity):
     def __call__(self, freqs, args):
         #self.check_ndim(args)
 
-        A = self.xp.array(args[:, 0])[:, self.xp.newaxis]
-        n = self.xp.array(args[:, 1])[:, self.xp.newaxis]
+        A = jnp.array(args[:, 0])[:, jnp.newaxis]
+        n = jnp.array(args[:, 1])[:, jnp.newaxis]
 
-        h2omega = A * (self.xp.atleast_2d(freqs) / self.fknee)**n
+        freqs = jnp.atleast_2d(freqs)
+
+        h2omega = self.h2omega(freqs, A, n)
 
         return h2omega
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def h2omega(self, freqs, A, n):
+        return A * (freqs / self.fknee)**n
+        
     
     @property
     def true_params(self):
@@ -302,21 +344,24 @@ class PhaseTransitions(EnergyDensity):
     def check_ndim(self, args):
         assert args.shape[-1] == self._ndim, args.shape
 
+    @partial(jax.jit, static_argnums=(0,))
     def h2omega_sw(self, freqs, Asw, fsw):
         fp = freqs / fsw
         h2omega = Asw * self.Csw(fp)
         return h2omega
     
+    @partial(jax.jit, static_argnums=(0,))
     def Csw(self, fp):
         return self.norm * fp**3. * (7. / (4. + 3.*fp**2.))**self._n
 
     def fturb_from_sw(self, fsw):
-        fturb = 27 / 26 * (8*self.xp.pi)**(1/3) * (10 / self._zp) * fsw
+        fturb = 27 / 26 * (8*jnp.pi)**(1/3) * (10 / self._zp) * fsw
         return fturb
     
     def hstar(self, Tstar):
         return 165e-7 * (Tstar / 1e2) * (self.gstar / 1e2)**(1./6.)
     
+    @partial(jax.jit, static_argnums=(0,))
     def Sturb_norm(self, freqs, fsw, Tstar):
         '''
         From ArXiv:1512.06239, I remove a term hstar from here to include it in the powerlaw amplitude
@@ -327,8 +372,9 @@ class PhaseTransitions(EnergyDensity):
         fp = freqs / fturb
         hstar = self.hstar(Tstar)
 
-        return fp**3 / ( (1 + fp)**(11/3) * (hstar + 8 * self.xp.pi * freqs) )
+        return fp**3 / ( (1 + fp)**(11/3) * (hstar + 8 * jnp.pi * freqs) )
     
+    @partial(jax.jit, static_argnums=(0,))
     def h2omega_turb(self, freqs, Aturb, fsw, Tstar):
         '''
         From ArXiv:1512.06239
@@ -340,14 +386,14 @@ class PhaseTransitions(EnergyDensity):
     def __call__(self, freqs, args):
         #self.check_ndim(args)
 
-        Asw = self.xp.array(args[:, 0])[:, self.xp.newaxis]
-        fsw = self.xp.array(args[:, 1])[:, self.xp.newaxis]
+        Asw = jnp.asarray(args[:, 0])[:, jnp.newaxis]
+        fsw = jnp.asarray(args[:, 1])[:, jnp.newaxis]
 
         h2omega_sw = self.h2omega_sw(freqs, Asw, fsw)
 
         if self.turb:
-            Aturb = self.xp.array(args[:, 2])[:, self.xp.newaxis]
-            Tstar = self.xp.array(args[:, 3])[:, self.xp.newaxis]
+            Aturb = jnp.asarray(args[:, 2])[:, jnp.newaxis]
+            Tstar = jnp.asarray(args[:, 3])[:, jnp.newaxis]
 
             h2omega_turb = self.h2omega_turb(freqs=freqs, Aturb=Aturb, fsw=fsw, Tstar=Tstar)
 
