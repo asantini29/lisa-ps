@@ -189,7 +189,7 @@ else:
                     result[special_index] = p0 + p1 * (x_new[i] - x[idx]) + p2 * (x_new[i] - x[idx])**2 + p3 * (x_new[i] - x[idx])**3
 
 class AkimaInterpolant():
-    def __init__(self, use_gpu=True, threadsperblock = 64):
+    def __init__(self, use_gpu=True, threadsperblock=64):
 
         # TODO: add flexibility in output shape
 

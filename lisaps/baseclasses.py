@@ -104,10 +104,9 @@ class GPUobject:
                     self.interp = scipy_Akima1DInterpolator
             
             else:
-                ndim_out = self.interpkwargs['ndim_out'] if 'ndim_out' in self.interpkwargs.keys() else 2
                 threadsperblock = self.interpkwargs['threadsperblock'] if 'threadsperblock' in self.interpkwargs.keys() else 32
                 
-                AkimaInterpolantNumba = AkimaInterpolant(ndim_out=ndim_out, threadsperblock=threadsperblock)
+                AkimaInterpolantNumba = AkimaInterpolant(use_gpu=self.use_gpu, threadsperblock=threadsperblock)
                 self.interp = AkimaInterpolantNumba
 
         else:
