@@ -204,26 +204,43 @@ class StochasticContribution(GPUobject):
 
         return responseinterp
 
+    def get_isotropicresponse(self, freqs):
+        '''
+        Get the isotropic response for the TDI channels selected (only works with A, E, and T).
+        '''
+        if self.TDIsetup == 'AET':
+            idxs = [self.available_channels.index(channel) for channel in self.channels]
+            isotropicresponse = self.isotropicresponse_interp(freqs)[:, idxs]
+        else:
+            isotropicresponse = self.isotropicresponse_interp(freqs)
+        
+        return isotropicresponse
+    
+    def get_GBresponse(self, freqs):
+        '''
+        Get the GB response for the TDI channels selected (only works with A, E, and T).
+        '''
+        if self.TDIsetup == 'AET':
+            idxs = [self.available_channels.index(channel) for channel in self.channels]
+            GBresponse = self.GBresponse_interp(freqs)[:, idxs]
+        else:
+            GBresponse = self.GBresponse_interp(freqs)
+
+        return GBresponse
 
     def set_isotropicresponse(self, freqs):
         '''
         Set the isotropic response for the TDI channels selected (only works with A, E, and T).
         '''
-        if self.TDIsetup == 'AET':
-            idxs = [self.available_channels.index(channel) for channel in self.channels]
-            self.isotropicresponse = self.isotropicresponse_interp(freqs)[:, idxs]
-        else:
-            self.isotropicresponse = self.isotropicresponse_interp(freqs)
+        
+        self.isotropicresponse = self.get_isotropicresponse(freqs)
     
     def set_GBresponse(self, freqs):
         '''
         Set the GB response for the TDI channels selected (only works with A, E, and T).
         '''
-        if self.TDIsetup == 'AET':
-            idxs = [self.available_channels.index(channel) for channel in self.channels]
-            self.GBresponse = self.GBresponse_interp(freqs)[:, idxs]
-        else:
-            self.GBresponse = self.GBresponse_interp(freqs)
+        
+        self.GBresponse = self.get_GBresponse(freqs)
 
 
     def TDI_background(self, freqs, args):

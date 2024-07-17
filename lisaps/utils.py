@@ -1,11 +1,16 @@
+import os
+
 import jax
 import jax.numpy as jnp
 from functools import partial
 import warnings
 import h5py
 from tqdm import tqdm
+from cudakima import AkimaInterpolant1D
 
 jax.config.update("jax_enable_x64", True)
+
+
 
 import numpy as np
 
@@ -89,9 +94,9 @@ class FisherMatrix(BaseNoise):
 
 class DataGenerator(GPUobject):
     
-    def __init__(self, psd_fn, domain='frequency', use_gpu=False):
+    def __init__(self, psd_fn, spline_kwargs={}, domain='frequency', use_gpu=False):
         '''
-        Initialize the Utils class.
+        Initialize the generator class.
 
         Args:
             psd_fn (callable): A callable to generate the desired PSD given an array of frequencies.
@@ -100,6 +105,7 @@ class DataGenerator(GPUobject):
         '''
         super().__init__(use_gpu=use_gpu)
         self.psd_fn = psd_fn
+        self.spline_kwargs = spline_kwargs
 
         assert domain in ['frequency', 'time'], 'Domain must be either "frequency" or "time".'
         self.domain = domain
@@ -131,7 +137,7 @@ class DataGenerator(GPUobject):
         Raises:
         - ValueError: If neither freqs nor N and dt are provided.
         '''
-
+        #breakpoint()
         if freqs is None and N is None and dt is None:
             raise ValueError('Either provide the frequencies or the number of samples and the sampling rate.')
         if freqs is None:
@@ -144,6 +150,19 @@ class DataGenerator(GPUobject):
         psd_kwargs['freqs'] = freqs 
  
         psd = self.xp.real(self.psd_fn(*psd_args, **psd_kwargs))#.astype(self.xp.float64) #! working only with AET
+
+        if 'fknots' in self.spline_kwargs.keys() and 'wknots' in self.spline_kwargs.keys():
+            print('Perturbing the PSD with splines.')
+            self.spline_kwargs['suffix'] = '_splines'
+            fknots = self.spline_kwargs['fknots']
+            wknots = self.spline_kwargs['wknots']
+            interp = AkimaInterpolant1D(use_gpu=self.use_gpu)
+            perturbation = 10**(interp(np.log10(freqs), fknots, wknots))[:, None]
+
+            psd = psd * perturbation
+        
+        else:
+            self.spline_kwargs['suffix'] = ''
 
         if len(psd.shape) > 2:
             psd = psd[0]
@@ -207,8 +226,8 @@ class DataGenerator(GPUobject):
         first_letter = int(97 + skip)
         
         for i in tqdm(range(n_datasets)):
-            savename = f'{filename}' + chr(first_letter + i) + f'.{extension}'
             samples = self.__call__(*args, **kwargs)
+            savename = f'{filename}' + chr(first_letter + i) + self.spline_kwargs['suffix'] + f'.{extension}'
             
             if extension == 'npy':
                 np.save(savename, samples)
@@ -230,7 +249,7 @@ class DataGenerator(GPUobject):
 
 
 class NoiseGenerator(DataGenerator):
-    def __init__(self, noise_kwargs, domain='frequency', use_gpu=False):
+    def __init__(self, noise_kwargs, spline_kwargs={}, domain='frequency', use_gpu=False):
         '''
         Initialize the NoiseGenerator class.
 
@@ -242,11 +261,11 @@ class NoiseGenerator(DataGenerator):
         
         psd_fn = BaseNoise(**noise_kwargs).set_PSDS
 
-        super().__init__(psd_fn, domain=domain, use_gpu=use_gpu)
+        super().__init__(psd_fn, spline_kwargs=spline_kwargs, domain=domain, use_gpu=use_gpu)
 
 
 class SignalGenerator(DataGenerator):
-    def __init__(self, signal_kwargs, domain='frequency', use_gpu=False):
+    def __init__(self, signal_kwargs, spline_kwargs={}, domain='frequency', use_gpu=False):
         '''
         Initialize the SignalGenerator class.
 
@@ -257,7 +276,7 @@ class SignalGenerator(DataGenerator):
         '''
         signal_fn = StochasticContribution(**signal_kwargs).TDI_background#.backgrounds_fn[0]
 
-        super().__init__(signal_fn, domain=domain, use_gpu=use_gpu)
+        super().__init__(signal_fn,spline_kwargs=spline_kwargs, domain=domain, use_gpu=use_gpu)
 
 
 

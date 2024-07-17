@@ -2,6 +2,8 @@ from abc import ABC
 from typing import Callable
 import numpy as np
 
+import os
+
 try:
     import cupy as xp
     from cupyx.scipy.interpolate import make_interp_spline as cupy_make_interp_spline
@@ -24,7 +26,6 @@ import jax.numpy as jnp
 from functools import partial
 
 jax.config.update("jax_enable_x64", True)
-
 
 
 class GPUobject:
@@ -156,10 +157,14 @@ class BaseNoise(GPUobject):
         tdi_tf_oms_T(freqs): TDI transfer function for ISI OMS noise in TDI T.
     """
 
-    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, equal_arms=False, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', interpkwargs=dict(kind='akima', axis=1)):
+    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, equal_arms=False, custom_armlength=None, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', interpkwargs=dict(kind='akima', axis=1)):
         GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs)
-
-        self.armlength = ARMLENGTH_EQUAL if equal_arms else ARMLENGTH_AVERAGE
+        if custom_armlength is not None:
+            self.armlength = custom_armlength
+            print('Using custom armlength: {}'.format(custom_armlength))
+        else:
+            self.armlength = ARMLENGTH_EQUAL if equal_arms else ARMLENGTH_AVERAGE
+            print('Using default armlength: {}'.format(self.armlength))
         self.fs = fs if fs is not None else FS
 
         self.asdTM = asdTM
@@ -582,7 +587,7 @@ class BaseNoise(GPUobject):
     #     """
     #     return jax.vmap(self.compute_PSDS, in_axes=(0, 0, None))(asdTM, asdOMS, freqs)
 
-    def set_PSDS(self, freqs, squeeze=False, out=False):
+    def set_PSDS(self, freqs, squeeze=False, out=False, **kwargs):
         """
         Sets the PSDS (Power Spectral Density Sensitivity) for the given frequencies using the stored amplitudes.
 
@@ -600,7 +605,7 @@ class BaseNoise(GPUobject):
         if out:
             return self.PSDS_design
     
-    def get_PSDS(self, asdTM, asdOMS, freqs=None, squeeze=False):
+    def get_PSDS(self, asdTM, asdOMS, freqs=None, squeeze=False, **kwargs):
         """
         Compute the Power Spectral Density (PSD) using the given ASDs (Amplitude Spectral Densities).
 

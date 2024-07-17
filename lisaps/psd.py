@@ -68,6 +68,7 @@ class Psd(BaseNoise, StochasticContribution):
                  fmax=2.9e-2, 
                  freqs=None,
                  equal_arms=False,
+                 custom_armlength=None,
                  Ncov=None, 
                  channels=None, 
                  use_gpu=False, 
@@ -91,7 +92,7 @@ class Psd(BaseNoise, StochasticContribution):
             asdTM = 0.
             asdOMS = 0.
 
-        BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, equal_arms=equal_arms, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
+        BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, equal_arms=equal_arms, custom_armlength=custom_armlength, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
 
         if not isinstance(backgrounds, list):
             backgrounds = [backgrounds]
@@ -166,7 +167,7 @@ class Psd(BaseNoise, StochasticContribution):
             if self.fitASDs:
                 self.noisefn = self.constmod
             else:
-                self.noisefn = self.get_PSDS                 
+                self.noisefn = self.set_PSDS                 
 
 
     def constmod(self, freqs,  args, **kwargs):
