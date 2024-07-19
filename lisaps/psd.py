@@ -5,8 +5,6 @@ from .stochasticbackgrounds import StochasticContribution
 from typing import Any, Callable
 import numpy as np
 
-from cupyx.scipy.interpolate import Akima1DInterpolator as cupy_Akima1DInterpolator
-
 import jax
 import jax.numpy as jnp
 from functools import partial
@@ -235,10 +233,7 @@ class Psd(BaseNoise, StochasticContribution):
         perturbation = jnp.asarray(perturbation)        
 
         PSDS = PSDS * perturbation
-        #PSDS[ftol_mask] = self.xp.nan
-        #PSDS = PSDS.at[ftol_mask].set(jnp.nan)
-        
-        #breakpoint()   
+         
 
         return PSDS
     
@@ -359,31 +354,6 @@ class Psd(BaseNoise, StochasticContribution):
         return sortedpositions, sortedweights
                 
 
-    # def prepare_interp_input(self, args):
-    #     '''
-    #     here args is a list, probably of the fashion [ (edges), (knots) ] for a single channel.
-    #     I'd like to move away from dictionaries.
-    #     I want the output to be (knots position, knots weights)
-    #     '''
-    #     #breakpoint()
-
-    #     if len(args) == 1:
-    #         return self.knots, args[0] 
-        
-    #     else:
-    #         edges_weights, knots_full = self.xp.atleast_2d(self.xp.asarray(args[0])), self.xp.atleast_2d(self.xp.asarray(args[1])) #always work along the `1` axis for frequency operations
-
-    #         idxs_sorted = np.argsort(knots_full[:, 0])
-    #         knots_full = knots_full[idxs_sorted]
-
-    #         knots_positions = knots_full[:, 0]
-    #         knots_weights = knots_full[:, 1:]
-
-    #         knots = self.xp.hstack((self.logfmin, knots_positions, self.logfmax))
-    #         weights = self.xp.concatenate((edges_weights[:,0::2], knots_weights, edges_weights[:,1::2]), axis=0).T
-
-    #         return knots, weights
-
     def __call__(self, freqs, noiseargs=[], backargs=[], foreargs=[], noisegroups=[], backgroups=[], foregroups=[], **kwargs):
         '''
         Compute the total PSD in each channel.
@@ -413,7 +383,6 @@ class Psd(BaseNoise, StochasticContribution):
             except:
                 self.set_isotropicresponse(freqs)
                 response = self.isotropicresponse[jnp.newaxis, :, :]
-                #breakpoint()
 
             sgwbs_all = jnp.zeros_like(PSDS)
 

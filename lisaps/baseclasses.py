@@ -18,7 +18,7 @@ from scipy.interpolate import Akima1DInterpolator as scipy_Akima1DInterpolator
 from scipy import signal
 
 from .constants import *
-from .akima import AkimaInterpolant
+from cudakima import AkimaInterpolant1D
 
 
 import jax
@@ -105,10 +105,9 @@ class GPUobject:
                     self.interp = scipy_Akima1DInterpolator
             
             else:
-                threadsperblock = self.interpkwargs['threadsperblock'] if 'threadsperblock' in self.interpkwargs.keys() else 32
+                threadsperblock = self.interpkwargs['threadsperblock'] if 'threadsperblock' in self.interpkwargs.keys() else 64
                 
-                AkimaInterpolantNumba = AkimaInterpolant(use_gpu=self.use_gpu, threadsperblock=threadsperblock)
-                self.interp = AkimaInterpolantNumba
+                self.interp = AkimaInterpolant1D(use_gpu=self.use_gpu, threadsperblock=threadsperblock)
 
         else:
             raise NotImplementedError
