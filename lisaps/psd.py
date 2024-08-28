@@ -8,7 +8,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from functools import partial
-from pysco import performance
+from pysco import utils
 
 jax.config.update("jax_enable_x64", True)
 

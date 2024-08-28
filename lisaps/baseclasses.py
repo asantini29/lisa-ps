@@ -12,7 +12,6 @@ try:
 except (ModuleNotFoundError, ImportError):
     import numpy as xp
 
-from few.summation.interpolatedmodesum import CubicSplineInterpolant
 from scipy.interpolate import make_interp_spline as scipy_make_interp_spline
 from scipy.interpolate import Akima1DInterpolator as scipy_Akima1DInterpolator
 from scipy import signal
@@ -80,11 +79,8 @@ class GPUobject:
         except KeyError:
             kind = 'akima'
 
-        if kind == 'cubic':
-            self.interp =  CubicSplineInterpolant
-            self.interpkwargs = dict(use_gpu=self.use_gpu)
 
-        elif kind == 'bsplines':
+        if kind == 'bsplines':
             if self.use_gpu:    
                 self.interp = cupy_make_interp_spline
             else:

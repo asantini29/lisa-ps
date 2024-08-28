@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from pysco import performance
+from pysco import utils
 from typing import Any, Callable
 import warnings
 
