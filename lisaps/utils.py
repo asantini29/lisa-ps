@@ -14,7 +14,7 @@ jax.config.update("jax_enable_x64", True)
 
 import numpy as np
 
-from .baseclasses import BaseNoise, GPUobject
+from .baseclasses import BaseNoise, GPUobject, SciRDv1
 from .stochasticbackgrounds import StochasticContribution
 
 '''
@@ -249,7 +249,7 @@ class DataGenerator(GPUobject):
 
 
 class NoiseGenerator(DataGenerator):
-    def __init__(self, noise_kwargs, spline_kwargs={}, domain='frequency', use_gpu=False):
+    def __init__(self, scirdv=False, noise_kwargs={}, spline_kwargs={}, domain='frequency', use_gpu=False):
         '''
         Initialize the NoiseGenerator class.
 
@@ -258,8 +258,10 @@ class NoiseGenerator(DataGenerator):
         - domain (str, optional): The domain of the data. Must be either "frequency" or "time". Defaults to "frequency".
         - use_gpu (bool, optional): Flag indicating whether to use GPU acceleration. Defaults to False.
         '''
-        
-        psd_fn = BaseNoise(**noise_kwargs).set_PSDS
+        if scirdv:
+            psd_fn = SciRDv1(**noise_kwargs).set_PSDS
+        else:
+            psd_fn = BaseNoise(**noise_kwargs).set_PSDS
 
         super().__init__(psd_fn, spline_kwargs=spline_kwargs, domain=domain, use_gpu=use_gpu)
 
