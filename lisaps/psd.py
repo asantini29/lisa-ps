@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from .baseclasses import BaseNoise, TDIresponse
+from .baseclasses import BaseNoise, SciRDv1, TDIresponse
 from .stochasticbackgrounds import StochasticContribution
 from typing import Any, Callable
 import numpy as np
@@ -14,7 +14,7 @@ jax.config.update("jax_enable_x64", True)
 
 import warnings
 
-class Psd(BaseNoise, StochasticContribution):
+class Psd(SciRDv1, BaseNoise, StochasticContribution):
     """
     Psd class represents the power spectral density (PSD) model for noise and stochastic backgrounds.
 
@@ -23,7 +23,7 @@ class Psd(BaseNoise, StochasticContribution):
         asdOMS (float): ASD for OMS channel. Default is 7.9e-12.
         fmin (float): Minimum frequency. Default is 1e-4.
         fmax (float): Maximum frequency. Default is 2.5e-2.
-        freqs (array-like): Frequencies at which the PSDs are evaluated. Default is None.
+        fs (float): Sampling frequency. Default is None.
         equal_arms (bool): Flag indicating whether the arms have equal lengths. Default is False.
         Ncov (int): Number of covariance matrices. Default is None.
         channels (list): List of channel names. Default is None.
@@ -64,7 +64,7 @@ class Psd(BaseNoise, StochasticContribution):
                  asdOMS=7.9e-12, 
                  fmin=1e-4, 
                  fmax=2.9e-2, 
-                 freqs=None,
+                 fs=None,
                  equal_arms=False,
                  custom_armlength=None,
                  Ncov=None, 
@@ -83,6 +83,7 @@ class Psd(BaseNoise, StochasticContribution):
                  GBresponse=None,
                  correct_sagnac=True,
                  ftol=0.1,
+                 scirdv1=False,
                  **kwargs
                  ):
         
@@ -90,7 +91,10 @@ class Psd(BaseNoise, StochasticContribution):
             asdTM = 0.
             asdOMS = 0.
 
-        BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, equal_arms=equal_arms, custom_armlength=custom_armlength, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
+        if scirdv1:
+            SciRDv1.__init__(self, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
+        else:
+            BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, equal_arms=equal_arms, custom_armlength=custom_armlength, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
 
         if not isinstance(backgrounds, list):
             backgrounds = [backgrounds]
@@ -418,21 +422,43 @@ class Psd(BaseNoise, StochasticContribution):
         
         if self.nforegrounds > 0:
 
-            if not hasattr(self, 'GBresponse'):
+            try:
+                response = self.GBresponse[jnp.newaxis, :, :]
+            except:
                 self.set_GBresponse(freqs)
+                response = self.GBresponse[jnp.newaxis, :, :]
 
-            sgwfs_all = self.xp.zeros_like(PSDS)
+            sgwfs_all = jnp.zeros_like(PSDS)
 
             for i in range(self.nforegrounds):
                 
                 if len(foreargs[i]) > 0:
                     fore = self.foregrounds[i]
-                    h2omega = self.foregrounds_fn[i](freqs, foreargs[i], **kwargs[fore])
-                    Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
+                    h2omega = self.foregrounds_fn[i](freqs, foreargs[i], **kwargs[fore])[:,:,None] 
 
                     # Shs = self.xp.array(Sh).transpose(1, 2, 0)
                     # response = self.GBresponse[self.xp.newaxis, :, :]
                     # sgwbs_all += Shs * response 
 
+                    if self.foregroundperturbation:
+
+                        fknots, fweights = self.prepare_interp_input_numba(backargs[self.nforegrounds+2*i:self.nforegrounds+2*(i+1)], foregroups[self.nforegrounds+2*i:self.nforegrounds+2*(i+1)])
+
+                        ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(fknots)) < self.ftol, axis=-1), axis=0)
+                        
+                        logperturbation = self.logperturbation_numba(freqs=freqs, knots=fknots, weights=fweights)
+                       
+                        perturbation = 10**logperturbation
+                        perturbation[ftol_mask] = self.xp.nan
+                        perturbation = jnp.asarray(perturbation)        
+
+                        h2omega = h2omega * perturbation
+
+                    Shs = self.convert_to_psd(freqs, h2omega)
+                    #Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
+                    #Shs = self.xp.array(Sh).transpose(1, 2, 0)
+                    sgwfs_all = sgwfs_all + Shs  
+
+                PSDS = PSDS + sgwfs_all * response 
 
         return PSDS

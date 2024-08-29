@@ -72,6 +72,8 @@ class StochasticContribution(GPUobject):
         self.TDIsetup = TDIsetup
         self.equal_arms = equal_arms
 
+        self.armlength = ARMLENGTH_EQUAL if equal_arms else ARMLENGTH_AVERAGE
+
         if channels is not None:
             self.channels = channels
         else:
@@ -151,7 +153,7 @@ class StochasticContribution(GPUobject):
     @property
     def implemented_foregrounds(self):
         return [
-
+            'galactic'
         ]
 
     @property
@@ -160,7 +162,8 @@ class StochasticContribution(GPUobject):
              'powerlaw': PowerLaw,
              'sobhs': PowerLaw,
              'cs': PowerLaw,
-             'fopt': PhaseTransitions
+             'fopt': PhaseTransitions,
+             'galactic': HyperbolicTangent,
         }
     
     @property
@@ -235,12 +238,22 @@ class StochasticContribution(GPUobject):
         
         self.isotropicresponse = self.get_isotropicresponse(freqs)
     
-    def set_GBresponse(self, freqs):
+    def set_GBresponse(self, freqs, analytical=False):
         '''
         Set the GB response for the TDI channels selected (only works with A, E, and T).
         '''
-        
-        self.GBresponse = self.get_GBresponse(freqs)
+        if analytical:
+            self.GBresponse = self.analytical_GBresponse(freqs)
+        else:
+            self.GBresponse = self.get_GBresponse(freqs)
+    
+    def analytical_GBresponse(self, freqs):
+        '''
+        Analytical expression for the GB response.
+        '''
+        x = 2 * jnp.pi * freqs * self.armlength / C
+
+        return 6 * x**2 * jnp.sin(x)**2 
 
 
     def TDI_background(self, freqs, args):
@@ -427,5 +440,42 @@ class PhaseTransitions(EnergyDensity):
         self._true_params = true_params
 
 
-class GBForeground(EnergyDensity):
-    pass
+class HyperbolicTangent(EnergyDensity):
+    '''
+    Model from https://arxiv.org/pdf/2405.04690
+    '''
+    def __init__(self, use_gpu):
+
+        EnergyDensity.__init__(self, use_gpu=use_gpu)
+
+        self._ndim = self.ndim()
+
+    def ndim(self):
+        return 5
+    
+    def check_ndim(self, args):
+        assert args.shape[-1] == self._ndim, args.shape
+    
+    def __call__(self, freqs, args):
+
+        A = jnp.array(args[:, 0])[:, jnp.newaxis]
+        f1 = jnp.array(args[:, 1])[:, jnp.newaxis]
+        alpha = jnp.array(args[:, 2])[:, jnp.newaxis]
+        fknee = jnp.array(args[:, 3])[:, jnp.newaxis]
+        f2 = jnp.array(args[:, 4])[:, jnp.newaxis]
+
+        freqs = jnp.atleast_2d(freqs)
+
+        h2omega = self.h2omega(freqs, A, f1, alpha, fknee, f2)
+
+        return h2omega
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def h2omega(self, freqs, A, f1, alpha, fknee, f2):
+
+        h_fg = 1 / 2 * A * freqs**(-7/3) * jnp.exp( - (freqs / f1)**alpha) * (1 + jnp.tanh((freqs - fknee) / f2))
+        
+        #same units of the cosmological backgrounds
+        h2omega = h_fg / ( (3 * H0h**2 / (4 * jnp.pi**2 * freqs[None, :, None]**3)) * (2 * jnp.pi) )
+
+        return h2omega
