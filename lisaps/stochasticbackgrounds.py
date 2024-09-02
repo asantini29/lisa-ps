@@ -55,19 +55,10 @@ class StochasticContribution(GPUobject):
         self.units = units
 
         self._implemented_backgrounds = self.implemented_backgrounds
-        self._implemented_functions = self.implented_classes
+        self._implemented_foregrounds = self.implemented_foregrounds
+        self._implemented_functions = self.implemented_classes
 
         self.available_channels = ['AA', 'EE', 'TT', 'XX', 'YY', 'ZZ', 'XY', 'XZ', 'YZ']
-
-        if not isinstance(backgrounds, list):
-            backgrounds = [backgrounds]
-
-        for back in backgrounds:
-            if back not in self._implemented_backgrounds:
-                raise ValueError(str(back) + ' is not a supported background')
-        
-        self.backgrounds = backgrounds
-        self.nbackgrounds = len(backgrounds)
 
         self.TDIsetup = TDIsetup
         self.equal_arms = equal_arms
@@ -83,15 +74,30 @@ class StochasticContribution(GPUobject):
                 self.channels = ['XX', 'YY', 'ZZ', 'XY', 'XZ', 'YZ']
             else:
                 raise ValueError('TDIsetup not recognized. Choose between AET and XYZ')
+        
+        # backgrounds setup
+        if not isinstance(backgrounds, list):
+            backgrounds = [backgrounds]
+
+        for back in backgrounds:
+            if back not in self._implemented_backgrounds:
+                raise ValueError(str(back) + ' is not a supported background')
+        
+        self.backgrounds = backgrounds
+        self.nbackgrounds = len(backgrounds)
             
         self.correct_sagnac = correct_sagnac
-        self.isotropicresponse_interp = self.set_responseinterp(isotropicresponse)
 
+        if len(self.backgrounds) > 0:
+            self.isotropicresponse_interp = self.set_responseinterp(isotropicresponse)
+
+        # foregrounds setup
         if not isinstance(foregrounds, list):
             foregrounds = [foregrounds]
 
         for fore in foregrounds:
-            assert fore in self._implemented_foregrounds
+            if fore not in self._implemented_foregrounds:
+                raise ValueError(str(fore) + ' is not a supported foreground')
         
         self.foregrounds = foregrounds
         self.nforegrounds = len(foregrounds)
@@ -130,7 +136,7 @@ class StochasticContribution(GPUobject):
                 bkwargs = background_kwargs[back]
             else:
                 bkwargs = {}
-            self.backgrounds_fn += [self.implented_classes[back](use_gpu=self.use_gpu, **bkwargs)]
+            self.backgrounds_fn += [self.implemented_classes[back](use_gpu=self.use_gpu, **bkwargs)]
 
     def set_foregrounds_fn(self, foreground_kwargs):
         self.foregrounds_fn = []
@@ -138,8 +144,8 @@ class StochasticContribution(GPUobject):
             if fore in foreground_kwargs.keys():
                 fkwargs = foreground_kwargs[fore]
             else:
-                bkwargs = {}
-            self.foregrounds_fn += [self.implented_classes[fore](use_gpu=self.use_gpu, **fkwargs)]
+                fkwargs = {}
+            self.foregrounds_fn += [self.implemented_classes[fore](use_gpu=self.use_gpu, **fkwargs)]
 
     @property
     def implemented_backgrounds(self):
@@ -157,7 +163,7 @@ class StochasticContribution(GPUobject):
         ]
 
     @property
-    def implented_classes(self):
+    def implemented_classes(self):
         return {
              'powerlaw': PowerLaw,
              'sobhs': PowerLaw,
@@ -171,7 +177,8 @@ class StochasticContribution(GPUobject):
         return {
             'sobhs': jnp.array([3.4e-13, 2/3]),
             'cs': jnp.array([5.5e-12, 0]),
-            'fopt': jnp.array([4.22e-12, 9.86e-4, 2.88e-14, 200])
+            'fopt': jnp.array([4.22e-12, 9.86e-4, 2.88e-14, 200]),
+            'galactic': jnp.array([1.5e-15, 1e-3, 2.5, 1e-3, 1e-3])
         }
     
     def set_responseinterp(self, response):

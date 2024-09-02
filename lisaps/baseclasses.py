@@ -267,7 +267,7 @@ class BaseNoise(GPUobject):
         """
         #asd = jnp.atleast_2d(asdOMS) # m / sqrt(Hz)
         asd = asdOMS # m / sqrt(Hz)
-        psd_meters = asd**2 * (1 + (self.fkneeOMS / freqs)**4) #jnp.atleast_2d(1 + (self.fkneeOMS / freqs)**4)  # m^2 / Hz
+        #psd_meters = asd**2 * (1 + (self.fkneeOMS / freqs)**4) #jnp.atleast_2d(1 + (self.fkneeOMS / freqs)**4)  # m^2 / Hz
 
         #psd_hertz = jnp.atleast_2d(jnp.abs((-0.5 * jnp.exp(-2j * jnp.pi * freqs * 1/FS) + 0.5 * jnp.exp(2j * jnp.pi * freqs * 1/FS)))**2 * FS**2 * (CENTRAL_FREQ / C)**2) * psd_meters
         
@@ -633,9 +633,9 @@ class SciRDv1(BaseNoise):
         fkneeTM = 4e-4
         fkneeOMS = 2e-3
 
-        custom_armlength = 2.5e9 / C
+        # custom_armlength = 2.5e9 / C
 
-        BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, fkneeTM=fkneeTM, fkneeOMS=fkneeOMS, custom_armlength=custom_armlength, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
+        BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, fkneeTM=fkneeTM, fkneeOMS=fkneeOMS, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
 
     def testmass_single(self, asdTM, freqs):
         """

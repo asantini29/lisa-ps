@@ -72,7 +72,7 @@ class Psd(SciRDv1, BaseNoise, StochasticContribution):
                  use_gpu=False, 
                  units='hertz', 
                  noiseless=False, 
-                 splineperturbation={}, 
+                 splineperturbation={'noise':False, 'background':False, 'foreground':False}, 
                  interpkwargs=None, 
                  fitASDs=False, 
                  backgrounds=[],
