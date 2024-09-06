@@ -35,7 +35,6 @@ class Likelihood:
                     average=False,
                     hermitian=True,
                     fullmatrix=False,
-                    Nbins=1000,
                     f_segments=1e-5,
                     window=('kaiser', 30),
                     noisekeys=[],
@@ -62,7 +61,6 @@ class Likelihood:
             fmin=fmin,
             fmax=fmax,
             average=average,
-            Nbins=Nbins,
             f_segments=f_segments,
             fullmatrix=fullmatrix,
             window=window,
@@ -214,9 +212,8 @@ class Likelihood:
                 mempool = xp.get_default_memory_pool()
                 mempool.free_all_blocks()
             #breakpoint()
-            logl = self.compute_logl(psd, ntilde, ntildentilde)
+            logl = self.compute_logl(psd, ntilde, ntildentilde).real
             # logl = - self.xp.sum( self.xp.sum(ntildentilde / cov, axis = -1) + self.nu * xp.sum(self.xp.log(cov), axis = -1) , axis = -1)
-            # breakpoint()
             logl_all.append(logl)
 
         logl_out = np.concatenate(logl_all)

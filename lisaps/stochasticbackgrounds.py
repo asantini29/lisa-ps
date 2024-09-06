@@ -178,7 +178,7 @@ class StochasticContribution(GPUobject):
             'sobhs': jnp.array([3.4e-13, 2/3]),
             'cs': jnp.array([5.5e-12, 0]),
             'fopt': jnp.array([4.22e-12, 9.86e-4, 2.88e-14, 200]),
-            'galactic': jnp.array([1.5e-15, 1e-3, 2.5, 1e-3, 1e-3])
+            #'galactic': jnp.array([1.5e-15, 1e-3, 2.5, 1e-3, 1e-3])
         }
     
     def set_responseinterp(self, response):
@@ -230,11 +230,8 @@ class StochasticContribution(GPUobject):
         '''
         Get the GB response for the TDI channels selected (only works with A, E, and T).
         '''
-        if self.TDIsetup == 'AET':
-            idxs = [self.available_channels.index(channel) for channel in self.channels]
-            GBresponse = self.GBresponse_interp(freqs)[:, idxs]
-        else:
-            GBresponse = self.GBresponse_interp(freqs)
+        
+        GBresponse = self.GBresponse_interp(freqs)
 
         return GBresponse
 
@@ -249,19 +246,25 @@ class StochasticContribution(GPUobject):
         '''
         Set the GB response for the TDI channels selected (only works with A, E, and T).
         '''
+        if self.TDIsetup == 'AET':
+            idxs = [self.available_channels.index(channel) for channel in self.channels]
         if analytical:
-            self.GBresponse = self.analytical_GBresponse(freqs)
+            self.GBresponse = self.analytical_GBresponse(freqs)[:, idxs]
         else:
-            self.GBresponse = self.get_GBresponse(freqs)
+            self.GBresponse = self.get_GBresponse(freqs)[:, idxs]
     
+    @partial(jax.jit, static_argnums=(0,))
     def analytical_GBresponse(self, freqs):
         '''
         Analytical expression for the GB response.
         '''
-        x = 2 * jnp.pi * freqs * self.armlength / C
+        x = 2 * jnp.pi * freqs * self.armlength
 
-        return 6 * x**2 * jnp.sin(x)**2 
-
+        respA =  6 * x**2 * jnp.sin(x)**2 
+        respE =  6 * x**2 * jnp.sin(x)**2
+        respT =  0.0 * x**2
+        
+        return jnp.array([respA, respE, respT]).T
 
     def TDI_background(self, freqs, args):
         '''
@@ -451,7 +454,7 @@ class HyperbolicTangent(EnergyDensity):
     '''
     Model from https://arxiv.org/pdf/2405.04690
     '''
-    def __init__(self, use_gpu):
+    def __init__(self, use_gpu=False):
 
         EnergyDensity.__init__(self, use_gpu=use_gpu)
 
@@ -466,23 +469,25 @@ class HyperbolicTangent(EnergyDensity):
     def __call__(self, freqs, args):
 
         A = jnp.array(args[:, 0])[:, jnp.newaxis]
-        f1 = jnp.array(args[:, 1])[:, jnp.newaxis]
+        s1 = jnp.array(args[:, 1])[:, jnp.newaxis]
         alpha = jnp.array(args[:, 2])[:, jnp.newaxis]
         fknee = jnp.array(args[:, 3])[:, jnp.newaxis]
-        f2 = jnp.array(args[:, 4])[:, jnp.newaxis]
+        s2 = jnp.array(args[:, 4])[:, jnp.newaxis]
 
         freqs = jnp.atleast_2d(freqs)
 
-        h2omega = self.h2omega(freqs, A, f1, alpha, fknee, f2)
+        h_fg = self.h_fg(freqs, A, s1, alpha, fknee, s2)
 
-        return h2omega
+        return h_fg
     
     @partial(jax.jit, static_argnums=(0,))
-    def h2omega(self, freqs, A, f1, alpha, fknee, f2):
+    def h_fg(self, freqs, A, s1, alpha, fknee, s2):
 
-        h_fg = 1 / 2 * A * freqs**(-7/3) * jnp.exp( - (freqs / f1)**alpha) * (1 + jnp.tanh((freqs - fknee) / f2))
-        
+        h_fg = 0.5 * A * (freqs**(-7./3.)) * jnp.exp(- s1*(freqs**alpha)) * (1.0 + jnp.tanh( -(freqs - fknee)*s2))
+        xx = - s1*(freqs**alpha)
+        yy = -(freqs - fknee)*s2
+        log_h = jnp.log(A) + (-7./3.) * jnp.log(freqs) + xx - jnp.log(1 + jnp.exp(-2*yy)) 
         #same units of the cosmological backgrounds
-        h2omega = h_fg / ( (3 * H0h**2 / (4 * jnp.pi**2 * freqs[None, :, None]**3)) * (2 * jnp.pi) )
+        h2omega = h_fg / ( (3 * H0h**2 / (4 * jnp.pi**2 * freqs**3)) * (2 * jnp.pi) )
 
         return h2omega

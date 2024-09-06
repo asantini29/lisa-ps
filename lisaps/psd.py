@@ -64,6 +64,7 @@ class Psd(SciRDv1, BaseNoise, StochasticContribution):
                  asdOMS=7.9e-12, 
                  fmin=1e-4, 
                  fmax=2.9e-2, 
+                 T=1.0,
                  fs=None,
                  equal_arms=False,
                  custom_armlength=None,
@@ -87,14 +88,15 @@ class Psd(SciRDv1, BaseNoise, StochasticContribution):
                  **kwargs
                  ):
         
-        if noiseless:
-            asdTM = 0.
-            asdOMS = 0.
 
         if scirdv1:
-            SciRDv1.__init__(self, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
+            SciRDv1.__init__(self, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
         else:
-            BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, equal_arms=equal_arms, custom_armlength=custom_armlength, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
+            BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, equal_arms=equal_arms, custom_armlength=custom_armlength, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
+        
+        if noiseless:
+            self.asdTM = 0.
+            self.asdOMS = 0.
 
         if not isinstance(backgrounds, list):
             backgrounds = [backgrounds]
@@ -150,6 +152,14 @@ class Psd(SciRDv1, BaseNoise, StochasticContribution):
     def backgroundperturbation(self, value):
         self._backgroundperturbation = value
 
+    @property
+    def foregroundperturbation(self):
+        return self._foregroundperturbation
+    
+    @foregroundperturbation.setter
+    def foregroundperturbation(self, value):
+        self._foregroundperturbation = value
+
     def update_perturbation(self, splineperturbation):
         '''
         Update the spline perturbation.
@@ -157,6 +167,7 @@ class Psd(SciRDv1, BaseNoise, StochasticContribution):
         assert isinstance(splineperturbation, dict), '`splineperturbation` must be a dictionary'
         self.noiseperturbation = splineperturbation['noise']
         self.backgroundperturbation = splineperturbation['background']
+        self.foregroundperturbation = splineperturbation['foreground']
         self.set_noisefn()
         print('Using ' + self.noisefn.__name__)
 
@@ -422,43 +433,37 @@ class Psd(SciRDv1, BaseNoise, StochasticContribution):
         
         if self.nforegrounds > 0:
 
-            try:
+            if hasattr(self, 'GBresponse'):
                 response = self.GBresponse[jnp.newaxis, :, :]
-            except:
-                self.set_GBresponse(freqs)
+            else:
+                self.set_GBresponse(freqs, analytical=True)
                 response = self.GBresponse[jnp.newaxis, :, :]
-
-            sgwfs_all = jnp.zeros_like(PSDS)
-
-            for i in range(self.nforegrounds):
                 
-                if len(foreargs[i]) > 0:
-                    fore = self.foregrounds[i]
-                    h2omega = self.foregrounds_fn[i](freqs, foreargs[i], **kwargs[fore])[:,:,None] 
+            fore = self.foregrounds[0]
+            h2omega = self.foregrounds_fn[0](freqs, foreargs[0], **kwargs[fore])[:,:,None] 
+            #breakpoint()
+            # Shs = self.xp.array(Sh).transpose(1, 2, 0)
+            # response = self.GBresponse[self.xp.newaxis, :, :]
+            # sgwbs_all += Shs * response 
 
-                    # Shs = self.xp.array(Sh).transpose(1, 2, 0)
-                    # response = self.GBresponse[self.xp.newaxis, :, :]
-                    # sgwbs_all += Shs * response 
+            if self.foregroundperturbation:
 
-                    if self.foregroundperturbation:
+                fknots, fweights = self.prepare_interp_input_numba(backargs[self.nforegrounds+2*i:self.nforegrounds+2*(i+1)], foregroups[self.nforegrounds+2*i:self.nforegrounds+2*(i+1)])
 
-                        fknots, fweights = self.prepare_interp_input_numba(backargs[self.nforegrounds+2*i:self.nforegrounds+2*(i+1)], foregroups[self.nforegrounds+2*i:self.nforegrounds+2*(i+1)])
+                ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(fknots)) < self.ftol, axis=-1), axis=0)
+                
+                logperturbation = self.logperturbation_numba(freqs=freqs, knots=fknots, weights=fweights)
+                
+                perturbation = 10**logperturbation
+                perturbation[ftol_mask] = self.xp.nan
+                perturbation = jnp.asarray(perturbation)        
 
-                        ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(fknots)) < self.ftol, axis=-1), axis=0)
-                        
-                        logperturbation = self.logperturbation_numba(freqs=freqs, knots=fknots, weights=fweights)
-                       
-                        perturbation = 10**logperturbation
-                        perturbation[ftol_mask] = self.xp.nan
-                        perturbation = jnp.asarray(perturbation)        
+                #Shs = Shs * perturbation
 
-                        h2omega = h2omega * perturbation
+            Shs = self.convert_to_psd(freqs, h2omega)
+            #Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
+            #Shs = self.xp.array(Sh).transpose(1, 2, 0)
 
-                    Shs = self.convert_to_psd(freqs, h2omega)
-                    #Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
-                    #Shs = self.xp.array(Sh).transpose(1, 2, 0)
-                    sgwfs_all = sgwfs_all + Shs  
-
-                PSDS = PSDS + sgwfs_all * response 
+            PSDS = PSDS + Shs * response 
 
         return PSDS

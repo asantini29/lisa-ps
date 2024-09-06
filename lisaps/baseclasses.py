@@ -23,6 +23,8 @@ from cudakima import AkimaInterpolant1D
 import jax
 import jax.numpy as jnp
 from functools import partial
+import warnings
+import matplotlib.pyplot as plt
 
 jax.config.update("jax_enable_x64", True)
 
@@ -120,6 +122,8 @@ class BaseNoise(GPUobject):
         fkneeTM (float): Test mass noise knee frequency [Hz].
         fkneeOMS (float): Optical metrology system noise knee frequency [Hz].
         equal_arms (bool): Flag indicating whether the detector has equal arm lengths.
+        custom_armlength (float): Custom length of the detector arms.
+        T (float): Duration of the data [years].
         fs (float): Sampling frequency [Hz].
         Ncov (int): Number of channels to consider.
         channels (str or list): Channels to consider. Can be 'AET', 'XYZ', or a list of channel names.
@@ -152,7 +156,7 @@ class BaseNoise(GPUobject):
         tdi_tf_oms_T(freqs): TDI transfer function for ISI OMS noise in TDI T.
     """
 
-    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, equal_arms=False, custom_armlength=None, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', interpkwargs=dict(kind='akima', axis=1)):
+    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, equal_arms=False, custom_armlength=None, T=1.0, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', interpkwargs=dict(kind='akima', axis=1)):
         GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs)
         if custom_armlength is not None:
             self.armlength = custom_armlength
@@ -161,6 +165,7 @@ class BaseNoise(GPUobject):
             self.armlength = ARMLENGTH_EQUAL if equal_arms else ARMLENGTH_AVERAGE
             print('Using default armlength: {}'.format(self.armlength))
         self.fs = fs if fs is not None else FS
+        self.FMIN = 1 / (T * YRSID_SI)
 
         self.asdTM = asdTM
         self.asdOMS = asdOMS
@@ -236,8 +241,8 @@ class BaseNoise(GPUobject):
         Model for OMS noise PSD in ISI carrier beatnote fluctuations.
         
         Args:
+            asdOMS (float, ndarray): The ASD (Amplitude Spectral Density) for the OMS (Optical Metrology System) noise.
             freqs (float): frequencies [Hz]
-            instru (Instrument): LISA instrument object
         """
         asd = jnp.atleast_1d(asdOMS)
         psd_meters = asd**2 * jnp.atleast_1d(1 + (self.fkneeOMS / freqs)**4)
@@ -262,8 +267,8 @@ class BaseNoise(GPUobject):
         Include transfer function of derivative filter instead of perfect 2 pi f
         
         Args:
+            asdOMS (float, ndarray): The ASD (Amplitude Spectral Density) for the OMS (Optical Metrology System) noise.
             freqs (float): frequencies [Hz]
-            instru (Instrument): LISA instrument object
         """
         #asd = jnp.atleast_2d(asdOMS) # m / sqrt(Hz)
         asd = asdOMS # m / sqrt(Hz)
@@ -278,14 +283,14 @@ class BaseNoise(GPUobject):
         psd_lowfreq = (#jnp.atleast_2d(
             (2 * jnp.pi * asd * CENTRAL_FREQ * self.fkneeOMS**2 / C) ** 2
             * jnp.abs(
-                (2 * jnp.pi * FMIN)
+                (2 * jnp.pi * self.FMIN)
                 / (
                     1
-                    - jnp.exp(-2 * jnp.pi * FMIN / self.fs)
+                    - jnp.exp(-2 * jnp.pi * self.FMIN / self.fs)
                     * jnp.exp(-2j * jnp.pi * freqs / self.fs)
                 )
             ) ** 2
-            * 1 / (self.fs * FMIN) ** 2
+            * 1 / (self.fs * self.FMIN) ** 2
         )
         psd_hertz = psd_highfreq + psd_lowfreq
 
@@ -309,8 +314,8 @@ class BaseNoise(GPUobject):
         Model for single TM noise PSD including filters used in the data generation
         
         Args:
+            asdTM (float, ndarray): The ASD (Amplitude Spectral Density) for the TM (Test Mass) noise.
             freqs (float): frequencies [Hz]
-            instru (Instrument): LISA instrument object
         """
         asd = jnp.atleast_2d(asdTM) # m / s^2 / sqrt(Hz)
         psd_acc = asd**2 * jnp.atleast_2d(1 + (self.fkneeTM / freqs)**2)  # m^2 / s^4 / Hz
@@ -336,38 +341,38 @@ class BaseNoise(GPUobject):
         Model for single TM noise PSD
         
         Args:
+            asdTM (float, ndarray): The ASD (Amplitude Spectral Density) for the TM (Test Mass) noise.
             freqs (float): frequencies [Hz]
-            instru (Instrument): LISA instrument object
         """
         #asd = jnp.atleast_2d(asdTM)
         asd = asdTM
         psd_highfreq = (#jnp.atleast_2d(
             (asd * CENTRAL_FREQ / (2 * jnp.pi * C)) ** 2
             * jnp.abs(
-                (2 * jnp.pi * FMIN)
+                (2 * jnp.pi * self.FMIN)
                 / (
                     1
-                    - jnp.exp(-2 * jnp.pi * FMIN / self.fs)
+                    - jnp.exp(-2 * jnp.pi * self.FMIN / self.fs)
                     * jnp.exp(-2j * jnp.pi * freqs / self.fs)
                 )
             )
             ** 2
             * 1
-            / (self.fs * FMIN) ** 2
+            / (self.fs * self.FMIN) ** 2
         )
         #psd_lowfreq = jnp.atleast_2d(
         psd_lowfreq = ((asd * CENTRAL_FREQ * self.fkneeTM / (2 * jnp.pi * C)) ** 2
             * jnp.abs(
-                (2 * jnp.pi * FMIN)
+                (2 * jnp.pi * self.FMIN)
                 / (
                     1
-                    - jnp.exp(-2 * jnp.pi * FMIN / self.fs)
+                    - jnp.exp(-2 * jnp.pi * self.FMIN / self.fs)
                     * jnp.exp(-2j * jnp.pi * freqs / self.fs)
                 )
             )
             ** 2
             * 1
-            / (self.fs * FMIN) ** 2
+            / (self.fs * self.FMIN) ** 2
             * jnp.abs(1 / (1 - jnp.exp(-2j * jnp.pi * freqs / self.fs))) ** 2
             * (2 * jnp.pi / self.fs) ** 2
         )
@@ -390,6 +395,9 @@ class BaseNoise(GPUobject):
     def tdi_common(self, freqs):
         '''
         TDI common factor for both XYZ and AET
+
+        Args:
+            freqs (float): frequencies [Hz]
         '''
         return 16 * jnp.sin(2 * jnp.pi * freqs * self.armlength) * jnp.sin(4 * jnp.pi * freqs * self.armlength)**2
     
@@ -402,7 +410,6 @@ class BaseNoise(GPUobject):
         
         Args:
             freqs (float): frequencies [Hz]
-            instru (Instrument): LISA instrument object
         """
         psd = self.tdi_common_AET(freqs) * (2 + jnp.cos(2 * xp.pi * freqs * self.armlength))
         #return jnp.sqrt(jnp.atleast_2d(psd))
@@ -414,7 +421,6 @@ class BaseNoise(GPUobject):
         
         Args:
             freqs (float): frequencies [Hz]
-            instru (Instrument): LISA instrument object
         """
         psd = 2 * self.tdi_common_AET(freqs) * (1 - jnp.cos(2 * jnp.pi * freqs * self.armlength))
         #return jnp.sqrt(jnp.atleast_2d(psd))
@@ -426,7 +432,6 @@ class BaseNoise(GPUobject):
         
         Args:
             freqs (float): frequencies [Hz]
-            instru (Instrument): LISA instrument object
         """
         psd = 4 * self.tdi_common_AET(freqs) * (1 + jnp.cos(2 * xp.pi * freqs * self.armlength) + jnp.cos(2 * xp.pi * freqs * self.armlength)**2 )
                             
@@ -439,7 +444,6 @@ class BaseNoise(GPUobject):
         
         Args:
             freqs (float): frequencies [Hz]
-            instru (Instrument): LISA instrument object
         """
         psd = 4 * self.tdi_common_AET(freqs) * (1 - jnp.cos(2 * jnp.pi * freqs * self.armlength))**2
         #return jnp.sqrt(jnp.atleast_2d(psd))
@@ -451,7 +455,6 @@ class BaseNoise(GPUobject):
         
         Args:
             freqs (float): frequencies [Hz]
-            instru (Instrument): LISA instrument object
         """
         psd = 4 * self.tdi_common(freqs) * jnp.sin(2 * jnp.pi * freqs * self.armlength)
         #return jnp.sqrt(jnp.atleast_2d(psd))
@@ -463,7 +466,6 @@ class BaseNoise(GPUobject):
         
         Args:
             freqs (float): frequencies [Hz]
-            instru (Instrument): LISA instrument object
         """
         psd = - self.tdi_common(freqs) * jnp.sin(4 * jnp.pi * freqs * self.armlength)
         #return jnp.atleast_2d(psd)
@@ -475,7 +477,6 @@ class BaseNoise(GPUobject):
         
         Args:
             freqs (float): frequencies [Hz]
-            instru (Instrument): LISA instrument object
         """
         psd = 4 * self.tdi_common(freqs) * jnp.sin(2 * jnp.pi * freqs * self.armlength) * (3 + jnp.cos(4 * jnp.pi * freqs * self.armlength))
         #return jnp.sqrt(jnp.atleast_2d(psd))
@@ -487,7 +488,6 @@ class BaseNoise(GPUobject):
         
         Args:
             freqs (float): frequencies [Hz]
-            instru (Instrument): LISA instrument object
         """
         psd = - 4 * self.tdi_common(freqs) * jnp.sin(4 * jnp.pi * freqs * self.armlength)
         #return jnp.atleast_2d(psd)
@@ -495,6 +495,7 @@ class BaseNoise(GPUobject):
 
     #! AET
     def testmass_A(self, asdTM, freqs):
+
         return self.tdi_tf_testmass_A(freqs) * self.filtered_testmass_single(asdTM, freqs)
 
     def testmass_T(self, asdTM, freqs):
@@ -567,21 +568,7 @@ class BaseNoise(GPUobject):
         """
         return (jnp.asarray([self.available_functions[channel](asdTM, asdOMS, freqs) for channel in self.channels])).transpose(1,0)
     
-    # def compute_batched_PSDS(self, asdTM, asdOMS, freqs):
-    #     """
-    #     Compute the batched Power Spectral Density (PSD) using the given ASDs and frequencies.
-
-    #     Parameters:
-    #     - asdTM (ndarray): The ASD (Amplitude Spectral Density) for the TM (Test Mass) channel.
-    #     - asdOMS (ndarray): The ASD for the OMS (Optical Metrology System) channel.
-    #     - freqs (ndarray): The frequencies at which to compute the PSD.
-
-    #     Returns:
-    #     - ndarray: The computed batched PSDs.
-
-    #     """
-    #     return jax.vmap(self.compute_PSDS, in_axes=(0, 0, None))(asdTM, asdOMS, freqs)
-
+    
     def set_PSDS(self, freqs, squeeze=False, out=False, **kwargs):
         """
         Sets the PSDS (Power Spectral Density Sensitivity) for the given frequencies using the stored amplitudes.
@@ -627,7 +614,7 @@ class BaseNoise(GPUobject):
 
 
 class SciRDv1(BaseNoise):
-    def __init__(self, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', interpkwargs=dict(kind='akima', axis=1), **kwargs):
+    def __init__(self, T=1.0, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', interpkwargs=dict(kind='akima', axis=1), **kwargs):
         asdTM = 3.0e-15
         asdOMS = 15.0e-12
         fkneeTM = 4e-4
@@ -635,7 +622,7 @@ class SciRDv1(BaseNoise):
 
         # custom_armlength = 2.5e9 / C
 
-        BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, fkneeTM=fkneeTM, fkneeOMS=fkneeOMS, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
+        BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, fkneeTM=fkneeTM, fkneeOMS=fkneeOMS, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
 
     def testmass_single(self, asdTM, freqs):
         """
@@ -781,7 +768,6 @@ class DataContainer(GPUobject):
                 fmin=1e-4,
                 fmax=2.9e-2,
                 average=False,
-                Nbins=1000,
                 f_segments=1e-5,
                 fullmatrix=False,
                 window=('kaiser', 30),
@@ -806,6 +792,7 @@ class DataContainer(GPUobject):
 
             self.window, self.Nbw = self.get_window(None, 2 * dtilde.shape[0])
 
+            freqs = jnp.real(freqs)
             d_tmp = dtilde
             self.d = None
         
@@ -1059,6 +1046,7 @@ class DataContainer(GPUobject):
         segment_sizes : float or ndarray
             Sizes of the frequency segments
         """
+        warnings.warn("This function is deprecated. Use `average_periodgram` instead.", DeprecationWarning)
         x_shape = y.shape
         freqs = jnp.fft.fftfreq(x_shape[0]) * fs
         #y = self.xp.asarray(y)
@@ -1130,3 +1118,44 @@ class DataContainer(GPUobject):
 
         return window, nenbw
     
+    def loglog(self, fig=None, axs=None, channels=None, **kwargs):
+        """
+        Plot the log-log periodogram of the data.
+        
+        Parameters
+        ----------
+        fig : matplotlib.figure.Figure, optional
+            The figure to plot the log-log periodogram on. If not provided, a new figure will be created.
+        axs : matplotlib.axes.Axes, optional
+            The axes to plot the log-log periodogram on. If not provided, a new axes will be created.
+        channels : list, optional
+            The channels to plot the log-log periodogram of. If not provided, all channels will be plotted.
+        **kwargs : dict
+            Additional keyword arguments to pass to the plot
+        """
+    
+        if channels is None:
+            channels = range(self.nchannels)
+            nchannels = self.nchannels
+        elif isinstance(channels, int):
+            channels = [channels]
+            nchannels = 1
+        else:
+            nchannels = len(channels)
+
+        if fig is None:
+            fig = plt.figure(figsize=(6 * nchannels, 6))
+        if axs is None:
+            axs = fig.subplots(1, nchannels)
+            axs = axs if nchannels > 1 else [axs]
+        
+        for i, ax in enumerate(axs):
+            ax.loglog(self.freqs, self.periodgram.real[:, channels[i]], **kwargs)
+            ax.set_xlabel('Frequency [Hz]')
+            #ax.set_title(f'Channel {self.channels[i]}')
+
+        axs[0].set_ylabel('PSD [Hz$^{-1}$]')
+
+        plt.tight_layout()
+        return fig, axs
+
