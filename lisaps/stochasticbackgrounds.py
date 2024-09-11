@@ -124,7 +124,7 @@ class StochasticContribution(GPUobject):
     @partial(jax.jit, static_argnums=(0,))
     def convert_to_psd(self, freqs, h2omega):
         
-        Sh = h2omega * (3 * H0h**2 / (4 * jnp.pi**2 * freqs[None, :, None]**3)) * (2 * jnp.pi) #strain units
+        Sh = h2omega * (3 * H0h**2 / (2 * jnp.pi * freqs[None, :, None]**3)) #strain units
         if not hasattr(self, '_conversion'):
             self.conversion = freqs
         return Sh * self.conversion
@@ -476,18 +476,23 @@ class HyperbolicTangent(EnergyDensity):
 
         freqs = jnp.atleast_2d(freqs)
 
-        h_fg = self.h_fg(freqs, A, s1, alpha, fknee, s2)
+        h2omega = self.h_fg(freqs, A, s1, alpha, fknee, s2)
 
-        return h_fg
+        return h2omega
     
     @partial(jax.jit, static_argnums=(0,))
     def h_fg(self, freqs, A, s1, alpha, fknee, s2):
+        #breakpoint()
+        Sgal = (
+            A
+            * jnp.exp(-(freqs**alpha) * s1)
+            * (freqs ** (-7.0 / 3.0))
+            * 0.5
+            * (1.0 + jnp.tanh(-(freqs - fknee) * s2))
+        )
 
-        h_fg = 0.5 * A * (freqs**(-7./3.)) * jnp.exp(- s1*(freqs**alpha)) * (1.0 + jnp.tanh( -(freqs - fknee)*s2))
-        xx = - s1*(freqs**alpha)
-        yy = -(freqs - fknee)*s2
-        log_h = jnp.log(A) + (-7./3.) * jnp.log(freqs) + xx - jnp.log(1 + jnp.exp(-2*yy)) 
+       
         #same units of the cosmological backgrounds
-        h2omega = h_fg / ( (3 * H0h**2 / (4 * jnp.pi**2 * freqs**3)) * (2 * jnp.pi) )
+        h2omega = Sgal / (3 * H0h**2 / (2 * jnp.pi * freqs**3)) 
 
         return h2omega

@@ -91,6 +91,7 @@ class Psd(SciRDv1, BaseNoise, StochasticContribution):
 
         if scirdv1:
             SciRDv1.__init__(self, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
+            print('Using SciRDv1')
         else:
             BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, equal_arms=equal_arms, custom_armlength=custom_armlength, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
         
@@ -458,7 +459,7 @@ class Psd(SciRDv1, BaseNoise, StochasticContribution):
                 perturbation[ftol_mask] = self.xp.nan
                 perturbation = jnp.asarray(perturbation)        
 
-                #Shs = Shs * perturbation
+                Shs = Shs * perturbation
 
             Shs = self.convert_to_psd(freqs, h2omega)
             #Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
