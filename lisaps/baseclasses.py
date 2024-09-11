@@ -156,7 +156,7 @@ class BaseNoise(GPUobject):
         tdi_tf_oms_T(freqs): TDI transfer function for ISI OMS noise in TDI T.
     """
 
-    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, equal_arms=False, custom_armlength=None, T=1.0, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', interpkwargs=dict(kind='akima', axis=1)):
+    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, equal_arms=False, custom_armlength=None, T=1.0, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', scirdv1=False, interpkwargs=dict(kind='akima', axis=1)):
         GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs)
         if custom_armlength is not None:
             self.armlength = custom_armlength
@@ -165,7 +165,17 @@ class BaseNoise(GPUobject):
             self.armlength = ARMLENGTH_EQUAL if equal_arms else ARMLENGTH_AVERAGE
             print('Using default armlength: {}'.format(self.armlength))
         self.fs = fs if fs is not None else FS
-        self.FMIN = FMIN #1 / (T * YRSID_SI)
+        self.FMIN = 1 / (T * YRSID_SI)
+        self.scirdv1 = scirdv1
+
+        self.setup_noise()
+
+
+        if self.scirdv1:
+            asdTM = 3.0e-15
+            asdOMS = 15.0e-12
+            fkneeTM = 4e-4
+            fkneeOMS = 2e-3
 
         self.asdTM = asdTM
         self.asdOMS = asdOMS
@@ -336,6 +346,32 @@ class BaseNoise(GPUobject):
         else:
             raise ValueError('units must be `hertz`, `meters` or `strain`')
         
+    def testmass_scirdv1(self, asdTM, freqs):
+        """
+        Model for single TM noise PSD including filters used in the data generation
+        
+        Args:
+            freqs (float): frequencies [Hz]
+            instru (Instrument): LISA instrument object
+        """
+        asd = jnp.atleast_1d(asdTM) # m / s^2 / sqrt(Hz)
+        psd_acc = asd**2 * jnp.atleast_1d( (1 + (self.fkneeTM / freqs)**2) * (1.0 + (freqs / 8e-3) ** 4)) # m^2 / s^4 / Hz
+
+        if self.units == 'hertz':
+            psd_hertz = jnp.atleast_1d(CENTRAL_FREQ / (2 * jnp.pi * C * freqs))**2 * psd_acc
+            return jnp.sqrt(psd_hertz)
+
+        elif self.units == 'meters':
+            psd_meters = jnp.atleast_1d(2 * jnp.pi * freqs)**(-4) * psd_acc
+            return jnp.sqrt(psd_meters)
+        
+        elif self.units == 'strain':
+            psd_strain = jnp.atleast_1d(1 / (2 * jnp.pi * C * freqs))**2 * psd_acc
+            return jnp.sqrt(psd_strain)
+
+        else:
+            raise ValueError('units must be `hertz`, `meters` or `strain`')
+        
     def filtered_testmass_single(self, asdTM, freqs):
         """
         Model for single TM noise PSD
@@ -349,30 +385,30 @@ class BaseNoise(GPUobject):
         psd_highfreq = (#jnp.atleast_2d(
             (asd * CENTRAL_FREQ / (2 * jnp.pi * C)) ** 2
             * jnp.abs(
-                (2 * jnp.pi * self.FMIN)
+                (2 * jnp.pi * FMIN)
                 / (
                     1
-                    - jnp.exp(-2 * jnp.pi * self.FMIN / self.fs)
+                    - jnp.exp(-2 * jnp.pi * FMIN / self.fs)
                     * jnp.exp(-2j * jnp.pi * freqs / self.fs)
                 )
             )
             ** 2
             * 1
-            / (self.fs * self.FMIN) ** 2
+            / (self.fs * FMIN) ** 2
         )
         #psd_lowfreq = jnp.atleast_2d(
         psd_lowfreq = ((asd * CENTRAL_FREQ * self.fkneeTM / (2 * jnp.pi * C)) ** 2
             * jnp.abs(
-                (2 * jnp.pi * self.FMIN)
+                (2 * jnp.pi * FMIN)
                 / (
                     1
-                    - jnp.exp(-2 * jnp.pi * self.FMIN / self.fs)
+                    - jnp.exp(-2 * jnp.pi * FMIN / self.fs)
                     * jnp.exp(-2j * jnp.pi * freqs / self.fs)
                 )
             )
             ** 2
             * 1
-            / (self.fs * self.FMIN) ** 2
+            / (self.fs * FMIN) ** 2
             * jnp.abs(1 / (1 - jnp.exp(-2j * jnp.pi * freqs / self.fs))) ** 2
             * (2 * jnp.pi / self.fs) ** 2
         )
@@ -508,7 +544,7 @@ class BaseNoise(GPUobject):
         return self.tdi_tf_oms_T(freqs) * self.filtered_oms_in_isi_carrier(asdOMS, freqs)
 
     @partial(jax.jit, static_argnums=(0,))
-    def get_SA(self, asdTM, asdOMS, freqs):
+    def get_SA_base(self, asdTM, asdOMS, freqs):
         '''
         Uncorrelated noise in the A, E tdi channels
         '''
@@ -516,12 +552,50 @@ class BaseNoise(GPUobject):
         return self.testmass_A(asdTM, freqs)**2 + self.oms_A(asdOMS, freqs)**2 
     
     @partial(jax.jit, static_argnums=(0,))
-    def get_ST(self, asdTM, asdOMS, freqs):
+    def get_ST_base(self, asdTM, asdOMS, freqs):
         '''
         Uncorrelated noise in the T tdi channel
         '''
         #return xp.atleast_2d(testmass_T(asd=asdTM)**2) + xp.atleast_2d(oms_T(asd=asdOMS)*2)
         return self.testmass_T(asdTM, freqs)**2 + self.oms_T(asdOMS, freqs)**2 
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def get_SA_scirdv1(self, asdTM, asdOMS, freqs):
+        '''
+        Uncorrelated noise in the A, E tdi channels. Code from: https://mikekatz04.github.io/LISAanalysistools/build/html/index.html#
+        '''
+
+        x = 2.0 * np.pi * self.armlength * freqs
+
+        Spm = self.testmass_scirdv1(asdTM, freqs) ** 2
+        Sop = self.oms_in_isi_carrier(asdOMS, freqs) ** 2
+
+        Sa = (
+            8.0
+            * jnp.sin(x) ** 2
+            * (
+                2.0 * Spm * (3.0 + 2.0 * jnp.cos(x) + jnp.cos(2 * x))
+                + Sop * (2.0 + jnp.cos(x))
+            )
+        )
+
+        return Sa
+        
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def get_ST_scirdv1(self, asdTM, asdOMS, freqs):
+        '''
+        Uncorrelated noise in the T tdi channel. Code from: https://mikekatz04.github.io/LISAanalysistools/build/html/index.html#
+        '''
+        x = 2.0 * np.pi * self.armlength * freqs
+
+        Spm = self.testmass_scirdv1(asdTM, freqs) ** 2
+        Sop = self.oms_in_isi_carrier(asdOMS, freqs) ** 2
+
+        return (
+            16.0 * Sop * (1.0 - jnp.cos(x)) * jnp.sin(x) ** 2
+            + 128.0 * Spm * jnp.sin(x) ** 2 * jnp.sin(0.5 * x) ** 4
+        )
     
     #! XYZ
     def testmass_XX(self, asdTM, freqs):
@@ -551,6 +625,18 @@ class BaseNoise(GPUobject):
         '''
         #return xp.atleast_2d(testmass_T(asd=asdTM)**2) + xp.atleast_2d(oms_T(asd=asdOMS)*2)
         return (self.testmass_XY(asdTM, freqs) + self.oms_XY(asdOMS, freqs))
+    
+    def setup_noise(self):
+        '''
+        Sets up the noise model for the given configuration.
+        '''
+        if self.scirdv1:
+            self.get_SA = self.get_SA_scirdv1
+            self.get_ST = self.get_ST_scirdv1
+        else:
+            self.get_SA = self.get_SA_base
+            self.get_ST = self.get_ST_base
+
     
     @partial(jax.vmap, in_axes=(None, 0, 0, None))
     def compute_PSDS(self, asdTM, asdOMS, freqs):
@@ -613,80 +699,80 @@ class BaseNoise(GPUobject):
             return self.compute_PSDS(asdTM, asdOMS, freqs)
 
 
-class SciRDv1(BaseNoise):
-    def __init__(self, T=1.0, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', interpkwargs=dict(kind='akima', axis=1), **kwargs):
-        asdTM = 3.0e-15
-        asdOMS = 15.0e-12
-        fkneeTM = 4e-4
-        fkneeOMS = 2e-3
+# class SciRDv1(BaseNoise):
+#     def __init__(self, T=1.0, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', interpkwargs=dict(kind='akima', axis=1), **kwargs):
+#         asdTM = 3.0e-15
+#         asdOMS = 15.0e-12
+#         fkneeTM = 4e-4
+#         fkneeOMS = 2e-3
 
-        # custom_armlength = 2.5e9 / C
+#         # custom_armlength = 2.5e9 / C
 
-        BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, fkneeTM=fkneeTM, fkneeOMS=fkneeOMS, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
+#         BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, fkneeTM=fkneeTM, fkneeOMS=fkneeOMS, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
 
-    def testmass_single(self, asdTM, freqs):
-        """
-        Model for single TM noise PSD including filters used in the data generation
+#     def testmass_single(self, asdTM, freqs):
+#         """
+#         Model for single TM noise PSD including filters used in the data generation
         
-        Args:
-            freqs (float): frequencies [Hz]
-            instru (Instrument): LISA instrument object
-        """
-        asd = jnp.atleast_1d(asdTM) # m / s^2 / sqrt(Hz)
-        psd_acc = asd**2 * jnp.atleast_1d( (1 + (self.fkneeTM / freqs)**2) * (1.0 + (freqs / 8e-3) ** 4)) # m^2 / s^4 / Hz
+#         Args:
+#             freqs (float): frequencies [Hz]
+#             instru (Instrument): LISA instrument object
+#         """
+#         asd = jnp.atleast_1d(asdTM) # m / s^2 / sqrt(Hz)
+#         psd_acc = asd**2 * jnp.atleast_1d( (1 + (self.fkneeTM / freqs)**2) * (1.0 + (freqs / 8e-3) ** 4)) # m^2 / s^4 / Hz
 
-        if self.units == 'hertz':
-            psd_hertz = jnp.atleast_1d(CENTRAL_FREQ / (2 * jnp.pi * C * freqs))**2 * psd_acc
-            return jnp.sqrt(psd_hertz)
+#         if self.units == 'hertz':
+#             psd_hertz = jnp.atleast_1d(CENTRAL_FREQ / (2 * jnp.pi * C * freqs))**2 * psd_acc
+#             return jnp.sqrt(psd_hertz)
 
-        elif self.units == 'meters':
-            psd_meters = jnp.atleast_1d(2 * jnp.pi * freqs)**(-4) * psd_acc
-            return jnp.sqrt(psd_meters)
+#         elif self.units == 'meters':
+#             psd_meters = jnp.atleast_1d(2 * jnp.pi * freqs)**(-4) * psd_acc
+#             return jnp.sqrt(psd_meters)
         
-        elif self.units == 'strain':
-            psd_strain = jnp.atleast_1d(1 / (2 * jnp.pi * C * freqs))**2 * psd_acc
-            return jnp.sqrt(psd_strain)
+#         elif self.units == 'strain':
+#             psd_strain = jnp.atleast_1d(1 / (2 * jnp.pi * C * freqs))**2 * psd_acc
+#             return jnp.sqrt(psd_strain)
 
-        else:
-            raise ValueError('units must be `hertz`, `meters` or `strain`')
+#         else:
+#             raise ValueError('units must be `hertz`, `meters` or `strain`')
         
-    @partial(jax.jit, static_argnums=(0,))
-    def get_SA(self, asdTM, asdOMS, freqs):
-        '''
-        Uncorrelated noise in the A, E tdi channels. Code from: https://mikekatz04.github.io/LISAanalysistools/build/html/index.html#
-        '''
+#     @partial(jax.jit, static_argnums=(0,))
+#     def get_SA(self, asdTM, asdOMS, freqs):
+#         '''
+#         Uncorrelated noise in the A, E tdi channels. Code from: https://mikekatz04.github.io/LISAanalysistools/build/html/index.html#
+#         '''
 
-        x = 2.0 * np.pi * self.armlength * freqs
+#         x = 2.0 * np.pi * self.armlength * freqs
 
-        Spm = self.testmass_single(asdTM, freqs) ** 2
-        Sop = self.oms_in_isi_carrier(asdOMS, freqs) ** 2
+#         Spm = self.testmass_single(asdTM, freqs) ** 2
+#         Sop = self.oms_in_isi_carrier(asdOMS, freqs) ** 2
 
-        Sa = (
-            8.0
-            * jnp.sin(x) ** 2
-            * (
-                2.0 * Spm * (3.0 + 2.0 * jnp.cos(x) + jnp.cos(2 * x))
-                + Sop * (2.0 + jnp.cos(x))
-            )
-        )
+#         Sa = (
+#             8.0
+#             * jnp.sin(x) ** 2
+#             * (
+#                 2.0 * Spm * (3.0 + 2.0 * jnp.cos(x) + jnp.cos(2 * x))
+#                 + Sop * (2.0 + jnp.cos(x))
+#             )
+#         )
 
-        return Sa
+#         return Sa
         
     
-    @partial(jax.jit, static_argnums=(0,))
-    def get_ST(self, asdTM, asdOMS, freqs):
-        '''
-        Uncorrelated noise in the T tdi channel. Code from: https://mikekatz04.github.io/LISAanalysistools/build/html/index.html#
-        '''
-        x = 2.0 * np.pi * self.armlength * freqs
+#     @partial(jax.jit, static_argnums=(0,))
+#     def get_ST(self, asdTM, asdOMS, freqs):
+#         '''
+#         Uncorrelated noise in the T tdi channel. Code from: https://mikekatz04.github.io/LISAanalysistools/build/html/index.html#
+#         '''
+#         x = 2.0 * np.pi * self.armlength * freqs
 
-        Spm = self.testmass_single(asdTM, freqs) ** 2
-        Sop = self.oms_in_isi_carrier(asdOMS, freqs) ** 2
+#         Spm = self.testmass_single(asdTM, freqs) ** 2
+#         Sop = self.oms_in_isi_carrier(asdOMS, freqs) ** 2
 
-        return (
-            16.0 * Sop * (1.0 - jnp.cos(x)) * jnp.sin(x) ** 2
-            + 128.0 * Spm * jnp.sin(x) ** 2 * jnp.sin(0.5 * x) ** 4
-        )
+#         return (
+#             16.0 * Sop * (1.0 - jnp.cos(x)) * jnp.sin(x) ** 2
+#             + 128.0 * Spm * jnp.sin(x) ** 2 * jnp.sin(0.5 * x) ** 4
+#         )
         
 
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from .baseclasses import BaseNoise, SciRDv1, TDIresponse
+from .baseclasses import BaseNoise, TDIresponse
 from .stochasticbackgrounds import StochasticContribution
 from typing import Any, Callable
 import numpy as np
@@ -14,7 +14,7 @@ jax.config.update("jax_enable_x64", True)
 
 import warnings
 
-class Psd(SciRDv1, BaseNoise, StochasticContribution):
+class Psd(BaseNoise, StochasticContribution):
     """
     Psd class represents the power spectral density (PSD) model for noise and stochastic backgrounds.
 
@@ -89,13 +89,7 @@ class Psd(SciRDv1, BaseNoise, StochasticContribution):
                  ):
         
 
-        if scirdv1:
-            SciRDv1.__init__(self, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
-            print('Using SciRDv1')
-            self.scirdv1_here = True
-        else:
-            BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, equal_arms=equal_arms, custom_armlength=custom_armlength, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
-            self.scirdv1_here = False
+        BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, equal_arms=equal_arms, custom_armlength=custom_armlength, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs, scirdv1=scirdv1, **kwargs)
 
         if noiseless:
             self.asdTM = 0.
