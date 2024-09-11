@@ -92,9 +92,11 @@ class Psd(SciRDv1, BaseNoise, StochasticContribution):
         if scirdv1:
             SciRDv1.__init__(self, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
             print('Using SciRDv1')
+            self.scirdv1_here = True
         else:
             BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, equal_arms=equal_arms, custom_armlength=custom_armlength, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
-        
+            self.scirdv1_here = False
+
         if noiseless:
             self.asdTM = 0.
             self.asdOMS = 0.
