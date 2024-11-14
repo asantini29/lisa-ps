@@ -1,6 +1,7 @@
 from abc import ABC
 from typing import Callable
 import numpy as np
+import pickle
 
 import os
 
@@ -47,6 +48,7 @@ class GPUobject:
     def __init__(self, use_gpu=False, interpkwargs=None):
         self.use_gpu = use_gpu
         self.xp = xp if use_gpu else np
+        self.interpkwargs = None
         
         if interpkwargs is not None:
             self.adjust_interpolant(interpkwargs)
@@ -110,7 +112,36 @@ class GPUobject:
         else:
             raise NotImplementedError
 
-    
+    def __getstate__(self):
+        """
+        Controls what gets pickled. Excludes GPU-specific interpolator functions or
+        other unpicklable objects.
+        """
+        state = self.__dict__.copy()
+        # Remove the interp function from the state, as it may not be picklable
+        state['interp'] = None
+        del state['xp']
+        return state
+
+    def __setstate__(self, state):
+        """
+        Controls how the object is restored. Reinitializes interp based on interpkwargs.
+        """
+        self.__dict__.update(state)
+        # Reinitialize the interpolator if needed
+        if self.interpkwargs is not None:
+            self.adjust_interpolant(self.interpkwargs) 
+        self.xp = xp if self.use_gpu else np
+
+    def save(self, filename):
+        """
+        Saves the object to a file.
+
+        Args:
+            filename (str): The name of the file to save the object to.
+        """
+        with open(filename, 'wb') as f:
+            pickle.dump(self, f)
 
 class BaseNoise(GPUobject):
     """
@@ -864,6 +895,7 @@ class DataContainer(GPUobject):
 
         self.nchannels = nchannels
         self.fullmatrix = fullmatrix
+        self.average = average
 
         if (t is None) and (freqs is None):
             raise ValueError('Provide either the times or frequencies')

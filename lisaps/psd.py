@@ -16,49 +16,53 @@ import warnings
 
 class Psd(BaseNoise, StochasticContribution):
     """
-    Psd class represents the power spectral density (PSD) model for noise and stochastic backgrounds.
-
-    Args:
-        asdTM (float): Amplitude spectral density (ASD) for TM channel. Default is 2.4e-15.
-        asdOMS (float): ASD for OMS channel. Default is 7.9e-12.
-        fmin (float): Minimum frequency. Default is 1e-4.
-        fmax (float): Maximum frequency. Default is 2.5e-2.
-        fs (float): Sampling frequency. Default is None.
-        equal_arms (bool): Flag indicating whether the arms have equal lengths. Default is False.
-        Ncov (int): Number of covariance matrices. Default is None.
-        channels (list): List of channel names. Default is None.
-        use_gpu (bool): Flag indicating whether to use GPU. Default is False.
-        units (str): Frequency units. Default is 'hertz'.
-        noiseless (bool): Flag indicating whether to consider noiseless case. Default is False.
-        splineperturbation (dict): Dictionary containing spline perturbation information. Default is {}.
-        interpkwargs (dict): Additional keyword arguments for interpolation. Default is None.
-        fitASDs (bool): Flag indicating whether to fit for ASDs. Default is False.
-        backgrounds (list): List of background models. Default is [].
-        background_kwargs (dict): Additional keyword arguments for background models. Default is {}.
-        foregrounds (list): List of foreground models. Default is [].
-        foreground_kwargs (dict): Additional keyword arguments for foreground models. Default is {}.
-        isotropicresponse (None): Isotropic response. Default is None.
-        GBresponse (None): GB response. Default is None.
-        ftol (float): Tolerance for spline interpolation. Default is 0.1.
-        **kwargs: Additional keyword arguments.
-
+    Psd class for handling power spectral densities (PSDs) with various perturbations and contributions.
+    This class inherits from BaseNoise and StochasticContribution and provides methods to compute and modify PSDs using spline or constant models. It also supports background and foreground contributions.
     Attributes:
-        PSDS_design (None): Design PSDs.
+        kwargs (dict): Additional keyword arguments.
+        PSDS_design (None): Placeholder for PSD design.
+        fmin (float): Minimum frequency.
+        fmax (float): Maximum frequency.
         logfmin (float): Logarithm of the minimum frequency.
         logfmax (float): Logarithm of the maximum frequency.
-        noiseperturbation (dict): Dictionary containing noise perturbation information.
-        backgroundperturbation (dict): Dictionary containing background perturbation information.
-        fitASDs (bool): Flag indicating whether to fit for ASDs.
-        ftol (float): Tolerance for spline interpolation.
-
+        fitASDs (bool): Flag to fit amplitude spectral densities (ASDs).
+        ftol (float): Tolerance for frequency differences.
+        noiseperturbation (bool): Flag for noise perturbation.
+        backgroundperturbation (bool): Flag for background perturbation.
+        foregroundperturbation (bool): Flag for foreground perturbation.
     Methods:
-        set_noisefn: Sets the noise function based on the perturbation type.
-        constmod: Applies constant modification to the input PSDs.
-        splinemod: Applies spline modification to the input PSDs.
-        logperturbation: Calculates the spline perturbation in logarithmic space.
-        logperturbation_numba: Calculates the spline perturbation using a numba cuda kernel.
-        prepare_interp_input_numba: Prepares the input for spline interpolation using a numba cuda kernel.
+        __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fmin=1e-4, fmax=2.9e-2, T=1.0, fs=None, equal_arms=False, custom_armlength=None, Ncov=None, channels=None, use_gpu=False, units='hertz', noiseless=False, perturbation={'noise':False, 'background':False, 'foreground':False}, interpkwargs=None, fitASDs=False, backgrounds=[], background_kwargs={}, foregrounds=[], foreground_kwargs={}, isotropicresponse=None, GBresponse=None, correct_sagnac=True, ftol=0.1, scirdv1=False, **kwargs):
+            Initializes the Psd class with given parameters.
+        noiseperturbation(self):
+            Getter for noise perturbation.
+        noiseperturbation(self, value):
+            Setter for noise perturbation.
+        backgroundperturbation(self):
+            Getter for background perturbation.
+        backgroundperturbation(self, value):
+            Setter for background perturbation.
+        foregroundperturbation(self):
+            Getter for foreground perturbation.
+        foregroundperturbation(self, value):
+            Setter for foreground perturbation.
+        update_perturbation(self, perturbation):
+            Updates the spline perturbation.
+        set_noisefn(self):
+            Sets the noise function based on perturbation and fitting flags.
+        constmod(self, freqs, args, **kwargs):
+            Constant model for PSDs.
+        splinemod(self, freqs, args, groups, knots=None, **kwargs):
+            Applies spline modification to the input PSDs.
+        logperturbation(self, freqs, knots, weights):
+            Computes the spline perturbation.
+        logperturbation_numba(self, freqs, knots, weights):
+            Computes the spline perturbation using numba.
+        prepare_interp_input_numba(self, args, groups):
+            Prepares input for spline interpolation using numba.
+        __call__(self, freqs, noiseargs=[], backargs=[], foreargs=[], noisegroups=[], backgroups=[], foregroups=[], **kwargs):
+            Computes the total PSD in each channel.
     """
+    
     def __init__(self, 
                  asdTM=2.4e-15, 
                  asdOMS=7.9e-12, 
@@ -73,7 +77,7 @@ class Psd(BaseNoise, StochasticContribution):
                  use_gpu=False, 
                  units='hertz', 
                  noiseless=False, 
-                 splineperturbation={'noise':False, 'background':False, 'foreground':False}, 
+                 perturbation={'noise':False, 'background':False, 'foreground':False}, 
                  interpkwargs=None, 
                  fitASDs=False, 
                  backgrounds=[],
@@ -88,6 +92,11 @@ class Psd(BaseNoise, StochasticContribution):
                  **kwargs
                  ):
         
+        self.kwargs = kwargs.copy()
+        if 'perturbation_type' not in kwargs:
+            self.kwargs['perturbation_type'] = 'spline'
+        else:
+            perturbation_type = kwargs.pop('perturbation_type')
 
         BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, equal_arms=equal_arms, custom_armlength=custom_armlength, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs, scirdv1=scirdv1, **kwargs)
 
@@ -126,7 +135,7 @@ class Psd(BaseNoise, StochasticContribution):
         # freqs = freqs
 
         self.fitASDs = fitASDs
-        self.update_perturbation(splineperturbation)
+        self.update_perturbation(perturbation)
 
         if (self.fitASDs) and (self.noiseperturbation):
             warnings.warn('Fitting both for the noise ASDs and perturbation. This will affect convergence')
@@ -157,14 +166,14 @@ class Psd(BaseNoise, StochasticContribution):
     def foregroundperturbation(self, value):
         self._foregroundperturbation = value
 
-    def update_perturbation(self, splineperturbation):
+    def update_perturbation(self, perturbation):
         '''
         Update the spline perturbation.
         '''
-        assert isinstance(splineperturbation, dict), '`splineperturbation` must be a dictionary'
-        self.noiseperturbation = splineperturbation['noise']
-        self.backgroundperturbation = splineperturbation['background']
-        self.foregroundperturbation = splineperturbation['foreground']
+        assert isinstance(perturbation, dict), '`perturbation` must be a dictionary'
+        self.noiseperturbation = perturbation['noise']
+        self.backgroundperturbation = perturbation['background']
+        self.foregroundperturbation = perturbation['foreground']
         self.set_noisefn()
         print('Using ' + self.noisefn.__name__)
 
@@ -364,6 +373,107 @@ class Psd(BaseNoise, StochasticContribution):
             sortedweights = self.xp.take_along_axis(weights, ii, axis=1).transpose(2,0,1)
 
         return sortedpositions, sortedweights
+    
+
+    @partial(jax.jit, static_argnums=(0,))
+    def gaussian_bump(self, freq, A, f_center, width):
+        '''
+        TODO change the function structure if we want to use RJ here
+        '''
+        return A * jnp.exp(-((freq - f_center)**2) / (2 * width**2))
+
+    @partial(jax.jit, static_argnums=(0,))
+    def gaussian_bump_sum(self, freq, A, f_center, width):
+        '''
+        TODO change the function structure if we want to use RJ here
+        '''
+        return jnp.sum(self.gaussian_bump(freq, A, f_center, width), axis=1)
+
+    def gaussian_bump_rj(self, freq, args, groups):
+        '''
+        TODO change the function structure if we want to use RJ here
+        '''
+        A = self.xp.array(args[:, 0])[:, jnp.newaxis]
+        f_center = self.xp.array(args[:, 1])[:, jnp.newaxis]
+        width = self.xp.array(args[:, 2])[:, jnp.newaxis]
+
+        group_unique, group_index, group_inverse, group_count = self.xp.unique(groups, return_index=True, return_counts=True, return_inverse=True)
+
+        nleavesmax = group_count.max().item()
+        A_full = self.xp.zeros((len(group_unique), nleavesmax, freq.shape[0]))
+        f_center_full = self.xp.zeros((len(group_unique), nleavesmax, freq.shape[0]))
+        width_full = self.xp.ones((len(group_unique), nleavesmax, freq.shape[0]))
+
+        for i, group in enumerate(group_unique):
+            idxs = self.xp.where(group_inverse == i)[0]
+            A_full[i, :len(idxs)] = A[idxs]
+            f_center_full[i, :len(idxs)] = f_center[idxs]
+            width_full[i, :len(idxs)] = width[idxs]
+        
+        A_full = jnp.array(A_full)
+        f_center_full = jnp.array(f_center_full)
+        width_full = jnp.array(width_full)
+
+        bump = self.gaussian_bump_sum(freq, A_full, f_center_full, width_full)
+        
+        return bump
+
+    @partial(jax.jit, static_argnums=(0,))
+    def log_gaussian_bump(self, freq, A, f_center, width):
+        '''
+        TODO change the function structure if we want to use RJ here
+        '''
+        #breakpoint()    
+        return A * jnp.exp(-(jnp.log(freq / f_center)**2) / (2 * width**2))
+
+    @partial(jax.jit, static_argnums=(0,))
+    def log_gaussian_bump_sum(self, freq, A, f_center, width):
+        '''
+        TODO change the function structure if we want to use RJ here
+        '''
+        return jnp.sum(self.log_gaussian_bump(freq, A, f_center, width), axis=1)
+
+    def log_gaussian_bump_rj(self, freq, args, groups, nin):
+        '''
+        TODO change the function structure if we want to use RJ here
+        '''
+        A = self.xp.array(args[:, 0])[:, jnp.newaxis]
+        f_center = self.xp.array(args[:, 1])[:, jnp.newaxis]
+        width = self.xp.array(args[:, 2])[:, jnp.newaxis]
+
+        group_unique, group_index, group_inverse, group_count = self.xp.unique(groups, return_index=True, return_counts=True, return_inverse=True)
+
+        nleavesmax = group_count.max().item()
+        #nin = group_unique.max().item() + 1
+        # A_full = self.xp.zeros((len(group_unique), nleavesmax, freq.shape[0]))
+        # f_center_full = self.xp.zeros((len(group_unique), nleavesmax, freq.shape[0]))
+        # width_full = self.xp.ones((len(group_unique), nleavesmax, freq.shape[0]))
+
+        A_full = self.xp.full(shape=(nin, nleavesmax, 1), fill_value=0.0)#self.xp.nan)        
+        f_center_full = self.xp.full(shape=(nin, nleavesmax, 1), fill_value= 0.0)#self.xp.nan)
+        width_full = self.xp.full(shape=(nin, nleavesmax, 1), fill_value=0.0)#self.xp.nan)
+
+        for i, group in enumerate(group_unique):
+            idxs = self.xp.where(group_inverse == i)[0]
+            A_full[i, :len(idxs)] = A[idxs]
+            f_center_full[i, :len(idxs)] = f_center[idxs]
+            width_full[i, :len(idxs)] = width[idxs]
+            
+        finite_mask = self.xp.isfinite(f_center_full)
+
+        #breakpoint()
+
+        A_full = jnp.array(A_full)#[finite_mask])
+        f_center_full = jnp.array(f_center_full)#[finite_mask])
+        width_full = jnp.array(width_full)#[finite_mask])
+
+        bump = self.log_gaussian_bump_sum(freq, A_full, f_center_full, width_full)
+
+        #ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(f_center_full[finite_mask], axis=1)) < self.ftol, axis=1), axis=0)
+        #ftol_mask = self.xp.any(self.xp.abs(self.xp.diff(f_center_full, axis=1)) < self.ftol, axis=1)
+        #bump.at[ftol_mask].set(jnp.nan)
+        
+        return bump
                 
 
     def __call__(self, freqs, noiseargs=[], backargs=[], foreargs=[], noisegroups=[], backgroups=[], foregroups=[], **kwargs):
@@ -421,6 +531,7 @@ class Psd(BaseNoise, StochasticContribution):
                     #h2omega = jnp.repeat(h2omega, self.Ncov, axis=-1)
                     #breakpoint()
                     Shs = self.convert_to_psd(freqs, h2omega)
+                    Shs = self.convert_units(freqs, Shs)
                     #Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
                     #Shs = self.xp.array(Sh).transpose(1, 2, 0)
                 
@@ -429,38 +540,48 @@ class Psd(BaseNoise, StochasticContribution):
             PSDS = PSDS + sgwbs_all * response 
         
         if self.nforegrounds > 0:
-
+            
             if hasattr(self, 'GBresponse'):
                 response = self.GBresponse[jnp.newaxis, :, :]
             else:
                 self.set_GBresponse(freqs, analytical=True)
                 response = self.GBresponse[jnp.newaxis, :, :]
+            
+            for j in range(self.nforegrounds): #compatibility with the idea of having multiple foregrounds
+                fore = self.foregrounds[j]
                 
-            fore = self.foregrounds[0]
-            h2omega = self.foregrounds_fn[0](freqs, foreargs[0], **kwargs[fore])[:,:,None] 
-            #breakpoint()
-            # Shs = self.xp.array(Sh).transpose(1, 2, 0)
-            # response = self.GBresponse[self.xp.newaxis, :, :]
-            # sgwbs_all += Shs * response 
+                Shs = self.foregrounds_fn[j](freqs, foreargs[j], **kwargs[fore])[:,:,None] 
+                nin = Shs.shape[0]
 
-            if self.foregroundperturbation:
+                if self.foregroundperturbation:
 
-                fknots, fweights = self.prepare_interp_input_numba(backargs[self.nforegrounds+2*i:self.nforegrounds+2*(i+1)], foregroups[self.nforegrounds+2*i:self.nforegrounds+2*(i+1)])
+                    if self.kwargs['perturbation_type'] == 'spline':
 
-                ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(fknots)) < self.ftol, axis=-1), axis=0)
-                
-                logperturbation = self.logperturbation_numba(freqs=freqs, knots=fknots, weights=fweights)
-                
-                perturbation = 10**logperturbation
-                perturbation[ftol_mask] = self.xp.nan
-                perturbation = jnp.asarray(perturbation)        
+                        fknots, fweights = self.prepare_interp_input_numba(foreargs[self.nforegrounds+2*j:self.nforegrounds+2*(j+1)], foregroups[self.nforegrounds+2*j:self.nforegrounds+2*(j+1)])
+                        ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(fknots)) < self.ftol, axis=-1), axis=0)
+                        logperturbation = self.logperturbation_numba(freqs=freqs, knots=fknots, weights=fweights)
+                        
+                        perturbation = 10**logperturbation
+                        perturbation[ftol_mask] = self.xp.nan
+                        perturbation = jnp.asarray(perturbation)        
 
-                Shs = Shs * perturbation
+                        Shs = Shs * perturbation
 
-            Shs = self.convert_to_psd(freqs, h2omega)
-            #Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
-            #Shs = self.xp.array(Sh).transpose(1, 2, 0)
+                    elif self.kwargs['perturbation_type'] == 'bump':
+                        #breakpoint()
+                        bump_args, bump_groups = foreargs[self.nforegrounds+j:self.nforegrounds+(j+1)][0], foregroups[self.nforegrounds+j:self.nforegrounds+(j+1)][0]
+                        bumps = self.log_gaussian_bump_rj(freqs, bump_args, bump_groups, nin) 
+                        Shs = Shs + bumps[:,:,None]
 
-            PSDS = PSDS + Shs * response 
+                    else:
+                        raise ValueError('Invalid perturbation type')
+
+                    
+
+                Shs = self.convert_units(freqs, Shs)
+                #Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
+                #Shs = self.xp.array(Sh).transpose(1, 2, 0)
+
+                PSDS = PSDS + Shs * response 
 
         return PSDS

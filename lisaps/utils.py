@@ -5,6 +5,7 @@ import jax.numpy as jnp
 from functools import partial
 import warnings
 import h5py
+import pickle
 from tqdm import tqdm
 from cudakima import AkimaInterpolant1D
 
@@ -17,11 +18,19 @@ import numpy as np
 from .baseclasses import BaseNoise, GPUobject
 from .stochasticbackgrounds import StochasticContribution
 
-'''
-script to compute the Fisher information matrix for a given likelihood function. for the moment, we will only consider the instrumental noise case.
-'''
+def load(filename):
+    with open(filename, 'rb') as f:
+        try:
+            return pickle.load(f)
+        except Exception as e:
+            print('---Could not load the file---')
+            print(e)
 
 class FisherMatrix(BaseNoise):
+
+    '''
+    script to compute the Fisher information matrix for a given likelihood function. for the moment, we will only consider the instrumental noise case.
+    '''
 
     def __init__(self,  
                  asdTM=2.4e-15, 

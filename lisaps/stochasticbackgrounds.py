@@ -123,8 +123,14 @@ class StochasticContribution(GPUobject):
 
     @partial(jax.jit, static_argnums=(0,))
     def convert_to_psd(self, freqs, h2omega):
-        
+        '''
+        Return the pixel psd. 
+        '''
         Sh = h2omega * (3 * H0h**2 / (2 * jnp.pi * freqs[None, :, None]**3)) #strain units
+        return Sh
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def convert_units(self, freqs, Sh):
         if not hasattr(self, '_conversion'):
             self.conversion = freqs
         return Sh * self.conversion
@@ -159,7 +165,8 @@ class StochasticContribution(GPUobject):
     @property
     def implemented_foregrounds(self):
         return [
-            'galactic'
+            'galactic',
+            'galactic_bump'
         ]
 
     @property
@@ -170,6 +177,7 @@ class StochasticContribution(GPUobject):
              'cs': PowerLaw,
              'fopt': PhaseTransitions,
              'galactic': HyperbolicTangent,
+             'galactic_bump': GaussianBumpHyperbolicTangent
         }
     
     @property
@@ -454,14 +462,15 @@ class HyperbolicTangent(EnergyDensity):
     '''
     Model from https://arxiv.org/pdf/2405.04690
     '''
-    def __init__(self, use_gpu=False):
+    def __init__(self, use_gpu=False, fit_exp=False):
 
         EnergyDensity.__init__(self, use_gpu=use_gpu)
 
+        self.fit_exp = fit_exp
         self._ndim = self.ndim()
 
     def ndim(self):
-        return 5
+        return 6 if self.fit_exp else 5
     
     def check_ndim(self, args):
         assert args.shape[-1] == self._ndim, args.shape
@@ -474,25 +483,106 @@ class HyperbolicTangent(EnergyDensity):
         fknee = jnp.array(args[:, 3])[:, jnp.newaxis]
         s2 = jnp.array(args[:, 4])[:, jnp.newaxis]
 
+        exp = jnp.array(args[:, 5])[:, jnp.newaxis] if self.fit_exp else (-7.0 / 3.0)
+
         freqs = jnp.atleast_2d(freqs)
 
-        h2omega = self.h_fg(freqs, A, s1, alpha, fknee, s2)
+        Sgal = self.Sgal(freqs, A, s1, alpha, fknee, s2, exp)
 
-        return h2omega
+        return Sgal
     
     @partial(jax.jit, static_argnums=(0,))
-    def h_fg(self, freqs, A, s1, alpha, fknee, s2):
+    def Sgal(self, freqs, A, s1, alpha, fknee, s2, exp):
         #breakpoint()
         Sgal = (
-            A
-            * jnp.exp(-(freqs**alpha) * s1)
-            * (freqs ** (-7.0 / 3.0))
-            * 0.5
+            0.5
+            * A
+            * jnp.exp(-(freqs*s1)**alpha)
+            * (freqs ** exp)
             * (1.0 + jnp.tanh(-(freqs - fknee) * s2))
         )
 
        
         #same units of the cosmological backgrounds
-        h2omega = Sgal / (3 * H0h**2 / (2 * jnp.pi * freqs**3)) 
+        #h2omega = Sgal / (3 * H0h**2 / (2 * jnp.pi * freqs**3)) 
 
-        return h2omega
+        return Sgal
+    
+
+class GaussianBumpHyperbolicTangent(HyperbolicTangent):
+    '''
+    Model from https://arxiv.org/pdf/2405.04690, with the addition of one (atm) Gaussian bump.
+    '''
+    def __init__(self, use_gpu=False, fit_exp=False):
+
+        HyperbolicTangent.__init__(self, use_gpu=use_gpu, fit_exp=fit_exp)
+
+        self._ndim = self.ndim()
+
+    def ndim(self):
+        return super(self).ndim() + 3
+    
+    def check_ndim(self, args):
+        assert args.shape[-1] == self._ndim, args.shape
+    
+    def __call__(self, freqs, args):
+
+        A = jnp.array(args[:, 0])[:, jnp.newaxis]
+        s1 = jnp.array(args[:, 1])[:, jnp.newaxis]
+        alpha = jnp.array(args[:, 2])[:, jnp.newaxis]
+        fknee = jnp.array(args[:, 3])[:, jnp.newaxis]
+        s2 = jnp.array(args[:, 4])[:, jnp.newaxis]
+    
+        A_bump = jnp.array(args[:, 5])[:, jnp.newaxis]
+        f_bump = jnp.array(args[:, 6])[:, jnp.newaxis]
+        sigma_bump = jnp.array(args[:, 7])[:, jnp.newaxis]
+
+        exp = jnp.array(args[:, 8])[:, jnp.newaxis] if self.fit_exp else (-7.0 / 3.0)
+
+        freqs = jnp.atleast_2d(freqs)
+
+        Sgal = self.Sgal(freqs, A, s1, alpha, fknee, s2, exp)
+        bump = self.gaussian_bump(freqs, A_bump, f_bump, sigma_bump)
+
+        return Sgal + bump
+    
+       
+    @partial(jax.jit, static_argnums=(0,))
+    def gaussian_bump(self, freq, A, f_center, width):
+        '''
+        TODO change the function structure if we want to use RJ here
+        '''
+        return A * jnp.exp(-((freq - f_center)**2) / (2 * width**2))
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def gaussian_bump_sum(self, freq, A, f_center, width):
+        '''
+        TODO change the function structure if we want to use RJ here
+        '''
+        return jnp.sum(self.gaussian_bump(freq, A, f_center, width), axis=1)
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def gaussian_bump_rj(self, freq, args, groups):
+        '''
+        TODO change the function structure if we want to use RJ here
+        '''
+        A = jnp.array(args[:, 0])[:, jnp.newaxis]
+        f_center = jnp.array(args[:, 1])[:, jnp.newaxis]
+        width = jnp.array(args[:, 2])[:, jnp.newaxis]
+
+        group_unique, group_index, group_inverse, group_count = jnp.unique(groups, return_index=True, return_counts=True, return_inverse=True)
+
+        A_full = jnp.zeros((len(group_unique), max(group_count), freq.shape[0]))
+        f_center_full = jnp.zeros((len(group_unique), max(group_count), freq.shape[0]))
+        width_full = jnp.ones((len(group_unique), max(group_count), freq.shape[0]))
+
+        for i, group in enumerate(group_unique):
+            idxs = jnp.where(group_inverse == i)[0]
+            A_full[i, :len(idxs)] = A[idxs]
+            f_center_full[i, :len(idxs)] = f_center[idxs]
+            width_full[i, :len(idxs)] = width[idxs]
+
+        bump = self.gaussian_bump_sum(freq, A_full, f_center_full, width_full)
+        
+        return bump
+    
