@@ -28,6 +28,7 @@ class StochasticContribution(GPUobject):
                  channels=None, 
                  units='strain', 
                  correct_sagnac=True, 
+                 pixelPSD=False,
                  **kwargs):
         """
         Initialize the StochasticContribution object.
@@ -108,6 +109,11 @@ class StochasticContribution(GPUobject):
         self.set_backgrounds_fn(background_kwargs)
         self.set_foregrounds_fn(foreground_kwargs)
 
+        if pixelPSD:
+            self.convert_to_psd = self.convert_to_pixel_psd
+        else:
+            self.convert_to_psd = self.convert_to_total_psd
+
     @property
     def conversion(self):
         return self._conversion
@@ -122,12 +128,20 @@ class StochasticContribution(GPUobject):
             self._conversion = 1 
 
     @partial(jax.jit, static_argnums=(0,))
-    def convert_to_psd(self, freqs, h2omega):
+    def convert_to_total_psd(self, freqs, h2omega):
+        '''
+        Return the  psd. 
+        '''
+        Sh = h2omega * (3 * H0h**2 / (4 * jnp.pi**2 * freqs[None, :, None]**3)) #strain units
+        return Sh
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def convert_to_pixel_psd(self, freqs, h2omega):
         '''
         Return the pixel psd. 
         '''
-        Sh = h2omega * (3 * H0h**2 / (2 * jnp.pi * freqs[None, :, None]**3)) #strain units
-        return Sh
+        Sh = self.convert_to_total_psd(self, freqs, h2omega)
+        return Sh *( 2 * jnp.pi^2)
     
     @partial(jax.jit, static_argnums=(0,))
     def convert_units(self, freqs, Sh):

@@ -89,6 +89,7 @@ class Psd(BaseNoise, StochasticContribution):
                  correct_sagnac=True,
                  ftol=0.1,
                  scirdv1=False,
+                 pixelPSD=False,
                  **kwargs
                  ):
         
@@ -121,7 +122,8 @@ class Psd(BaseNoise, StochasticContribution):
                                        channels=self.channels, 
                                        units=units,
                                        use_gpu=use_gpu,
-                                       correct_sagnac=correct_sagnac
+                                       correct_sagnac=correct_sagnac,
+                                       pixelPSD=pixelPSD,
                                        )
 
         self.PSDS_design = None
