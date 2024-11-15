@@ -140,8 +140,8 @@ class StochasticContribution(GPUobject):
         '''
         Return the pixel psd. 
         '''
-        Sh = self.convert_to_total_psd(self, freqs, h2omega)
-        return Sh *( 2 * jnp.pi^2)
+        Sh = self.convert_to_total_psd(freqs, h2omega)
+        return Sh * (2 * jnp.pi)
     
     @partial(jax.jit, static_argnums=(0,))
     def convert_units(self, freqs, Sh):
