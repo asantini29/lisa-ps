@@ -14,6 +14,28 @@ from functools import partial
 
 
 class StochasticContribution(GPUobject):
+    """
+    StochasticContribution class for handling stochastic background and foreground contributions in TDI channels.
+    Attributes:
+        available_channels (list): List of available TDI channels.
+        equal_arms (bool): Flag indicating whether the arms are of equal length.
+        armlength (float): Length of the arms.
+        channels (list): List of channels to include.
+        nbackgrounds (int): Number of background types.
+        isotropicresponse_interp (callable): Interpolated isotropic response function.
+        nforegrounds (int): Number of foreground types.
+        GBresponse_interp (callable): Interpolated GB response function.
+        convert_to_psd (callable): Function to convert to PSD.
+        backgrounds_fn (list): List of background functions.
+        foregrounds_fn (list): List of foreground functions.
+        implemented_backgrounds (list): List of implemented background types.
+        implemented_foregrounds (list): List of implemented foreground types.
+        implemented_classes (dict): Dictionary of implemented classes.
+        injection (dict): Dictionary of injection values.
+        TDIsetup (str): TDI setup to use.
+        correct_sagnac (bool): Flag indicating whether to correct for Sagnac effect.
+        units (str): Units of the output.
+    """
 
     def __init__(self, 
                  backgrounds=[], 
@@ -45,6 +67,7 @@ class StochasticContribution(GPUobject):
             channels (None or list): List of channels to include.
             units (str): Units of the output.
             correct_sagnac (bool): Flag indicating whether to correct for Sagnac effect.
+            pixelPSD (bool): Flag indicating whether to convert to pixel PSD. #todo: figure out the 2\pi factor
             **kwargs: Additional keyword arguments.
 
         Raises:
@@ -129,17 +152,31 @@ class StochasticContribution(GPUobject):
 
     @partial(jax.jit, static_argnums=(0,))
     def convert_to_total_psd(self, freqs, h2omega):
-        '''
-        Return the  psd. 
-        '''
+        """
+        Return the psd given the background functional function.
+
+        Args:
+            freqs (array): Array of frequencies.    
+            h2omega (array): Array of h2omega values.
+
+        Returns:
+            array: Array of Sh values. 
+        """
         Sh = h2omega * (3 * H0h**2 / (4 * jnp.pi**2 * freqs[None, :, None]**3)) #strain units
         return Sh
     
     @partial(jax.jit, static_argnums=(0,))
     def convert_to_pixel_psd(self, freqs, h2omega):
-        '''
-        Return the pixel psd. 
-        '''
+        """
+        Return the pixel psd given the background functional function.
+
+        Args:
+            freqs (array): Array of frequencies.    
+            h2omega (array): Array of h2omega values.
+
+        Returns:
+            array: Array of Sh values. 
+        """
         Sh = self.convert_to_total_psd(freqs, h2omega)
         return Sh * (2 * jnp.pi)
     
@@ -150,6 +187,17 @@ class StochasticContribution(GPUobject):
         return Sh * self.conversion
     
     def set_backgrounds_fn(self, background_kwargs):
+        """
+        Set the background functions based on the provided keyword arguments.
+        This method initializes the `backgrounds_fn` attribute with instances of the
+        implemented background classes. Each background class is instantiated with
+        the corresponding keyword arguments from `background_kwargs`.
+        Args:
+            background_kwargs (dict): A dictionary where keys are background names
+                                      and values are dictionaries of keyword arguments
+                                      to be passed to the background class constructors.
+        """
+
         self.backgrounds_fn = []
         for back in self.backgrounds:
             if back in background_kwargs.keys():
@@ -159,6 +207,17 @@ class StochasticContribution(GPUobject):
             self.backgrounds_fn += [self.implemented_classes[back](use_gpu=self.use_gpu, **bkwargs)]
 
     def set_foregrounds_fn(self, foreground_kwargs):
+        """
+        Set the foreground functions based on the provided keyword arguments.
+        This method initializes the `foregrounds_fn` attribute with instances of the
+        implemented foreground classes. Each foreground class is instantiated with
+        the corresponding keyword arguments from `foreground_kwargs`.
+        Args:
+            foreground_kwargs (dict): A dictionary where keys are foreground names
+                                      and values are dictionaries of keyword arguments
+                                      to be passed to the foreground class constructors.
+        """
+
         self.foregrounds_fn = []
         for fore in self.foregrounds:
             if fore in foreground_kwargs.keys():
@@ -204,6 +263,21 @@ class StochasticContribution(GPUobject):
         }
     
     def set_responseinterp(self, response):
+        """
+        Set the response interpolant for the TDI (Time Delay Interferometry) response.
+        Parameters:
+        response (str, list, or Callable): The response can be provided in three forms:
+            - None: Use default files based on the TDI setup and arm length configuration.
+            - str or list: Filename(s) of the TDI response files to be used for interpolation.
+            - Callable: A custom function to be evaluated on a range of frequencies.
+        Returns:
+        responseinterp: An interpolant for the TDI response, either created from the provided files or the custom function.
+        Raises:
+        ValueError: If the TDI setup is not recognized or if the response is not provided in an acceptable form.
+        Notes:
+        - If the response is None, default TDI response files will be used, which are valid only in the interval [3e-5, 5.9e-2] Hz.
+        - The default files are located in the directory '/data/asantini/packages/lisa-ps/utils/'.
+        """
 
         if response is None: #use default files
             TFdir = '/data/asantini/packages/lisa-ps/utils/'
@@ -237,9 +311,15 @@ class StochasticContribution(GPUobject):
         return responseinterp
 
     def get_isotropicresponse(self, freqs):
-        '''
-        Get the isotropic response for the TDI channels selected (only works with A, E, and T).
-        '''
+        """
+        Get the isotropic response for the TDI channels selected (this only works with A, E, and T).
+
+        Parameters:
+        freqs (array): Array of frequencies.
+
+        Returns:
+        isotropicresponse (array): Array of isotropic response values.
+        """
         if self.TDIsetup == 'AET':
             idxs = [self.available_channels.index(channel) for channel in self.channels]
             isotropicresponse = self.isotropicresponse_interp(freqs)[:, idxs]
@@ -249,25 +329,39 @@ class StochasticContribution(GPUobject):
         return isotropicresponse
     
     def get_GBresponse(self, freqs):
-        '''
-        Get the GB response for the TDI channels selected (only works with A, E, and T).
-        '''
+        """
+        Get the GB response for the TDI channels selected (this only works with A, E, and T).
+
+        Parameters:
+        freqs (array): Array of frequencies.
+
+        Returns:
+        GBresponse (array): Array of GB response values.
+        """
         
         GBresponse = self.GBresponse_interp(freqs)
 
         return GBresponse
 
     def set_isotropicresponse(self, freqs):
-        '''
+        """
         Set the isotropic response for the TDI channels selected (only works with A, E, and T).
-        '''
+    
+        Parameters:
+        freqs (array): Array of frequencies.
+        """
         
         self.isotropicresponse = self.get_isotropicresponse(freqs)
     
     def set_GBresponse(self, freqs, analytical=False):
-        '''
+        """
         Set the GB response for the TDI channels selected (only works with A, E, and T).
-        '''
+        
+        Parameters:
+        freqs (array): Array of frequencies.
+        analytical (bool): Flag indicating whether to use the analytical expression for the GB response.
+        """
+
         if self.TDIsetup == 'AET':
             idxs = [self.available_channels.index(channel) for channel in self.channels]
         if analytical:
@@ -277,9 +371,26 @@ class StochasticContribution(GPUobject):
     
     @partial(jax.jit, static_argnums=(0,))
     def analytical_GBresponse(self, freqs):
-        '''
-        Analytical expression for the GB response.
-        '''
+        """
+        Calculate the analytical gravitational background response for given frequencies.
+        Parameters
+        ----------
+        freqs : array-like
+            Array of frequency values at which to calculate the response.
+        Returns
+        -------
+        jnp.ndarray
+            A 2D array where each row corresponds to the response [respA, respE, respT] 
+            for a given frequency in `freqs`. The responses are calculated as follows:
+            - respA: Response A, proportional to 6 * x^2 * sin(x)^2
+            - respE: Response E, proportional to 6 * x^2 * sin(x)^2
+            - respT: Response T, which is always 0.0 * x^2
+        Notes
+        -----
+        - `x` is defined as 2 * pi * freqs * self.armlength.
+        - This function uses JAX's numpy (jnp) for array operations.
+        """
+        
         x = 2 * jnp.pi * freqs * self.armlength
 
         respA =  6 * x**2 * jnp.sin(x)**2 
@@ -289,9 +400,26 @@ class StochasticContribution(GPUobject):
         return jnp.array([respA, respE, respT]).T
 
     def TDI_background(self, freqs, args):
-        '''
-        Compute the background contribution to the TDI channels.
-        '''
+        """
+        Compute the Time-Delay Interferometry (TDI) background power spectral density (PSD).
+        Parameters:
+        -----------
+        freqs : array-like
+            Array of frequency values at which to compute the TDI background.
+        args : list
+            List of arguments for each background function in `self.backgrounds_fn`.
+        Returns:
+        --------
+        Sh : array-like
+            The computed power spectral density (PSD) of the TDI background, adjusted by the isotropic response.
+        Notes:
+        ------
+        - `self.backgrounds_fn` is expected to be a list of functions that take `freqs` and an argument from `args` and return an array.
+        - `self.convert_to_psd` is a method that converts the computed `h2omega` to a power spectral density.
+        - `self.set_isotropicresponse` is a method that sets the isotropic response for the given frequencies.
+        - The final PSD is scaled by the isotropic response before being returned.
+        """
+        
         h2omega = jnp.zeros(shape = (1, freqs.shape[0], 1))
 
         for i, back in enumerate(self.backgrounds_fn):
@@ -306,6 +434,19 @@ class StochasticContribution(GPUobject):
 
 
 class EnergyDensity(ABC, GPUobject):
+    """
+    EnergyDensity is an parent abstract base class that represents the energy density of a stochastic background.
+    It inherits from ABC and GPUobject.
+    Attributes:
+        use_gpu (bool): Indicates whether to use GPU for computations.
+        interpkwargs (dict): Keyword arguments for interpolation.
+    Methods:
+        ndim: Abstract property that should return the number of dimensions.
+        check_ndim(args): Abstract method to check the dimensions of the input arguments.
+        __call__(freqs, args): Abstract method to compute the energy density given frequencies and other arguments.
+
+    All the methods in this class are abstract and should be implemented in the derived classes.
+    """
     
     def __init__(self, use_gpu=False, interpkwargs=None):
         GPUobject.__init__(self, use_gpu, interpkwargs)
