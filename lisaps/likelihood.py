@@ -20,7 +20,29 @@ from .baseclasses import DataContainer
 from .utils import get_matrix_determinant
 
 class Likelihood:
-
+    """
+    A class to represent the likelihood for a given dataset and model. This interface is designed specifically to work with the `Eryn` sampler (https://mikekatz04.github.io/Eryn/html/index.html).
+    Attributes:
+        data (DataContainer): Container for the data and related parameters.
+        use_gpu (bool): Flag to indicate whether to use GPU for computations.
+        xp (module): Numpy or CuPy module depending on the use_gpu flag.
+        return_gpu (bool): Flag to indicate whether to return results on GPU.
+        nchannels (int): Number of channels in the data.
+        fmin (float): Minimum frequency for the analysis.
+        fmax (float): Maximum frequency for the analysis.
+        fullmatrix (bool): Flag to indicate whether to use full matrix operations.
+        hermitian (bool): Flag to indicate whether the matrix is Hermitian.
+        solve (function): Function to solve linear equations.
+        nsource_wf_gen (int): Number of source waveform generators.
+        psd_fn (function): Function to compute the power spectral density.
+        noisekeys (list): List of keys for noise components.
+        backgroundkeys (list): List of keys for background components.
+        foregroundkeys (list): List of keys for foreground components.
+        inf (float): Value to use for infinity in log likelihood calculations.
+        rj (bool): Flag for reversible jump MCMC.
+        nsubset (int): Number of subsets for parallel computation.
+        tc_container (list): Container for `Eryn` parameter transforms.
+    """
     def __init__(self, 
                     psd_fn, 
                     t=None,
@@ -47,10 +69,61 @@ class Likelihood:
                     rj=False,
                     **kwargs
                     ):
-        '''
-        TODO: write docstring
-        '''
-
+        
+        """
+        Initialize the Likelihood class.
+        Parameters:
+        -----------
+        psd_fn : function
+            Power spectral density function.
+        t : array-like, optional
+            Time array.
+        d : array-like, optional
+            Data array.
+        freqs : array-like, optional
+            Frequency array.
+        dtilde : array-like, optional
+            Fourier transformed data.
+        fmin : float, optional
+            Minimum frequency, default is 1e-4.
+        fmax : float, optional
+            Maximum frequency, default is 2.9e-2.
+        weights : array-like, optional
+            Weights for the data channels.
+        source_wf_gen : function or list of functions, optional
+            Source waveform generator(s).
+        nchannels : int, optional
+            Number of data channels, default is 3.
+        average : bool, optional
+            Whether to average the likelihood, default is False.
+        hermitian : bool, optional
+            Whether the covariance matrix is hermitian, default is True.
+        fullmatrix : bool, optional
+            Whether to use full matrix, default is False.
+        f_segments : float, optional
+            Frequency segments, default is 1e-5.
+        window : tuple, optional
+            Window function and its parameter, default is ('kaiser', 30).
+        noisekeys : list, optional
+            Keys for noise components.
+        backgroundkeys : list, optional
+            Keys for background components.
+        foregroundkeys : list, optional
+            Keys for foreground components.
+        inf : float, optional
+            Infinity value, default is 1e14.
+        use_gpu : bool, optional
+            Whether to use GPU, default is True.
+        return_gpu : bool, optional
+            Whether to return GPU arrays, default is False.
+        nsubset : int, optional
+            Number of subsets, default is 1.
+        rj : bool, optional
+            Whether to use RJMCMC, default is False.
+        **kwargs : dict
+            A
+            dditional keyword arguments.
+        """
         self.data = DataContainer(
             t=t,
             d=d,
@@ -66,6 +139,8 @@ class Likelihood:
             window=window,
             use_gpu=use_gpu
         )
+
+        #todo: pass the datacontainer as an input instead of the individual parameters.
 
         self.use_gpu = use_gpu
         self.xp = xp if self.use_gpu else np
@@ -87,7 +162,6 @@ class Likelihood:
             self.nsource_wf_gen = 0
 
             if average: # without signal we can use an averaged likelihood
-                #breakpoint()
                 self.compute_logl = self.wishart_logl
             else:
                 self.compute_logl = self.whittle_logl
@@ -120,18 +194,18 @@ class Likelihood:
             self._tc_container = tc_container
 
     def __call__(self, args, groups=None, **kwargs):
-        '''
-        TODO 
-        -) check vectorization
-        -) complete custom CUDA Kernel for spline interpolation
-        -) check factors in front
-        -) add response for individual sources
-
-        #* The order that `args` has to follow is [(templates), (noise), (backgrounds), (foregrounds)]
-
+        """
+        Evaluate the likelihood function.
+        This method evaluates the likelihood function given the input arguments.
+        Args:
+            args (list or any): The input arguments. The order that `args` has to follow is 
+                                [(templates), (noise), (backgrounds), (foregrounds)].
+            groups (list or None, optional): The groups for the input arguments. Defaults to None.
+            **kwargs: Additional keyword arguments.
+        Returns:
+            numpy.ndarray: The evaluated log-likelihood values.
+        """
         
-        '''
-
         if not isinstance(args, list):
             args = [args]
 
@@ -207,28 +281,28 @@ class Likelihood:
                 ntildentilde = self.data.dtildedtilde
                 logl_args = []
 
-            #breakpoint()
             if self.use_gpu:
                 mempool = xp.get_default_memory_pool()
                 mempool.free_all_blocks()
-            #breakpoint()
             logl = self.compute_logl(psd, ntilde, ntildentilde).real
-            # logl = - self.xp.sum( self.xp.sum(ntildentilde / cov, axis = -1) + self.nu * xp.sum(self.xp.log(cov), axis = -1) , axis = -1)
             logl_all.append(logl)
 
         logl_out = np.concatenate(logl_all)
         logl_out[~np.isfinite(logl_out)] = -self.inf
 
-        if not self.return_gpu:
-            #TODO write this in a more elegant way
+        if self.return_gpu:
+            return logl_out
+        else:
             try:
                 return logl_out.get()
             except:
                 return logl_out
-        else:
-            return logl_out
         
     def setup_indeces(self):
+        """
+        Set up the indeces for the different components.
+        """
+
         self.idx_wf = 0
         self.idx_noise = self.nsource_wf_gen
         self.idx_background = self.idx_noise + len(self.noisekeys)
@@ -237,7 +311,7 @@ class Likelihood:
         
     def unpack_args(self, args):
         """
-        Unpacks the arguments into separate components.
+        Unpacks the arguments into separate components. Transforms the parameters if necessary.
 
         Args:
             args (list): The list of arguments to be unpacked.
@@ -248,7 +322,6 @@ class Likelihood:
         wf_args, noise_args, background_args, foreground_args = [], [], [], []
         components = [wf_args, noise_args, background_args, foreground_args]
         indeces = self.indeces + [len(args)]
-        #breakpoint()
         
         for i in range(len(components)):
             if self.tc_container[i] is not None:
@@ -262,7 +335,6 @@ class Likelihood:
         wf_groups, noise_groups, background_groups, foreground_groups = [], [], [], []
         components = [wf_groups, noise_groups, background_groups, foreground_groups]
         indeces = self.indeces + [len(groups)]
-        #breakpoint()
         
         for i in range(len(components)):
             components[i] += groups[indeces[i] : indeces[i+1]]
