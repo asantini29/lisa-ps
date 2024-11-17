@@ -43,6 +43,9 @@ class GPUobject:
         __init__(self, use_gpu=False, interpkwargs=None): Initializes a GPUobject instance.
         gpu_capable(self): Returns True if the object is capable of using a GPU.
         adjust_interpolant(self, interpkwargs=None): Adjusts the interpolant to use for computations.
+        __getstate__(self): Controls what gets pickled. Excludes GPU-specific interpolator functions or other unpicklable objects.
+        __setstate__(self, state): Controls how the object is restored. Reinitializes interp based on interpkwargs.
+        save(self, filename): Saves the object to a file.
     '''
 
     def __init__(self, use_gpu=False, interpkwargs=None):
@@ -145,49 +148,66 @@ class GPUobject:
 
 class BaseNoise(GPUobject):
     """
-    Base class for modeling noise in a LISA.
-
-    Args:
-        asdTM (float): Amplitude spectral density of test mass noise [m/s^2/sqrt(Hz)].
-        asdOMS (float): Amplitude spectral density of optical metrology system noise [m/sqrt(Hz)].
-        fkneeTM (float): Test mass noise knee frequency [Hz].
-        fkneeOMS (float): Optical metrology system noise knee frequency [Hz].
-        equal_arms (bool): Flag indicating whether the detector has equal arm lengths.
-        custom_armlength (float): Custom length of the detector arms.
-        T (float): Duration of the data [years].
-        fs (float): Sampling frequency [Hz].
-        Ncov (int): Number of channels to consider.
-        channels (str or list): Channels to consider. Can be 'AET', 'XYZ', or a list of channel names.
-        use_gpu (bool): Flag indicating whether to use GPU acceleration.
-        units (str): Units of the noise PSD. Can be 'hertz', 'meters', or 'strain'.
-        interpkwargs (dict): Keyword arguments for interpolation.
-
+    BaseNoise class for modeling noise in LISA.
     Attributes:
+        asdTM (float): Amplitude spectral density for test mass noise.
+        asdOMS (float): Amplitude spectral density for OMS noise.
+        fkneeTM (float): Knee frequency for test mass noise.
+        fkneeOMS (float): Knee frequency for OMS noise.
         armlength (float): Length of the detector arms.
         fs (float): Sampling frequency.
-        asdTM (float): Amplitude spectral density of test mass noise.
-        asdOMS (float): Amplitude spectral density of optical metrology system noise.
-        fkneeTM (float): Test mass noise knee frequency.
-        fkneeOMS (float): Optical metrology system noise knee frequency.
-        available_channels (list): List of available channel names.
-        available_functions (dict): Dictionary mapping channel names to corresponding functions.
+        FMIN (float): Minimum frequency.
+        scirdv1 (bool): Flag indicating whether to use the scirdv1 configuration.
+        available_channels (list): List of available channels.
+        available_functions (dict): Dictionary mapping channels to their corresponding functions.
+        channels (list): List of selected channels.
         Ncov (int): Number of channels to consider.
-        channels (list): List of channel names to consider.
         TDIsetup (str): TDI setup configuration.
-        units (str): Units of the noise PSD.
-
-    Methods:
-        oms_in_isi_carrier(freqs): Model for OMS noise PSD in ISI carrier beatnote fluctuations.
-        filtered_oms_in_isi_carrier(freqs): Model for OMS noise PSD in ISI carrier beatnote fluctuations with filtered transfer function.
-        testmass_single(freqs): Model for single test mass noise PSD including filters used in the data generation.
-        filtered_testmass_single(freqs): Model for single test mass noise PSD with filtered transfer function.
-        tdi_common(freqs): TDI common factor for both XYZ and AET configurations.
-        tdi_common_AET(freqs): TDI common factor for AET configuration.
-        tdi_tf_oms_A(freqs): TDI transfer function for ISI OMS noise in TDI A,E.
-        tdi_tf_oms_T(freqs): TDI transfer function for ISI OMS noise in TDI T.
+        units (str): Units for the noise ('hertz', 'meters', or 'strain').
     """
 
     def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, equal_arms=False, custom_armlength=None, T=1.0, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', scirdv1=False, interpkwargs=dict(kind='akima', axis=1)):
+        """
+        Initialize the base class for LISA simulation.
+        Parameters:
+        -----------
+        asdTM : float, optional
+            Amplitude spectral density for test mass noise (default is 2.4e-15).
+        asdOMS : float, optional
+            Amplitude spectral density for optical metrology system noise (default is 7.9e-12).
+        fkneeTM : float, optional
+            Knee frequency for test mass noise (default is 0.4e-3).
+        fkneeOMS : float, optional
+            Knee frequency for optical metrology system noise (default is 2e-3).
+        equal_arms : bool, optional
+            If True, use equal arm lengths (default is False).
+        custom_armlength : float, optional
+            Custom arm length to use (default is None).
+        T : float, optional
+            Observation time in years (default is 1.0).
+        fs : float, optional
+            Sampling frequency (default is None).
+        Ncov : int, optional
+            Number of channels to consider (default is None).
+        channels : str or list, optional
+            Channels to use, either 'AET', 'XYZ', or a list of specific channels (default is 'AET').
+        use_gpu : bool, optional
+            If True, use GPU acceleration (default is False).
+        units : str, optional
+            Units for the noise, either 'strain' or other (default is 'strain').
+        scirdv1 : bool, optional
+            If True, use SCIR DV1 noise parameters (default is False).
+        interpkwargs : dict, optional
+            Keyword arguments for interpolation (default is dict(kind='akima', axis=1)).
+        Raises:
+        -------
+        ValueError
+            If neither the number nor the name of channels to consider is provided.
+        AssertionError
+            If the provided channels or Ncov values are invalid.
+        """
+        
+        
         GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs)
         if custom_armlength is not None:
             self.armlength = custom_armlength
@@ -311,13 +331,7 @@ class BaseNoise(GPUobject):
             asdOMS (float, ndarray): The ASD (Amplitude Spectral Density) for the OMS (Optical Metrology System) noise.
             freqs (float): frequencies [Hz]
         """
-        #asd = jnp.atleast_2d(asdOMS) # m / sqrt(Hz)
-        asd = asdOMS # m / sqrt(Hz)
-        #psd_meters = asd**2 * (1 + (self.fkneeOMS / freqs)**4) #jnp.atleast_2d(1 + (self.fkneeOMS / freqs)**4)  # m^2 / Hz
-
-        #psd_hertz = jnp.atleast_2d(jnp.abs((-0.5 * jnp.exp(-2j * jnp.pi * freqs * 1/FS) + 0.5 * jnp.exp(2j * jnp.pi * freqs * 1/FS)))**2 * FS**2 * (CENTRAL_FREQ / C)**2) * psd_meters
-        
-        #psd_highfreq = jnp.atleast_2d(asd * self.fs * CENTRAL_FREQ / C) ** 2 * jnp.sin(
+        asd = asdOMS 
         psd_highfreq = (asd * self.fs * CENTRAL_FREQ / C) ** 2 * jnp.sin(
             2 * jnp.pi * freqs / self.fs
         ) ** 2
@@ -379,11 +393,11 @@ class BaseNoise(GPUobject):
         
     def testmass_scirdv1(self, asdTM, freqs):
         """
-        Model for single TM noise PSD including filters used in the data generation
+        Model for single TM noise PSD in the scirdv1 configuration.
         
         Args:
+            asdTM (float, ndarray): The ASD (Amplitude Spectral Density) for the TM (Test Mass) noise.
             freqs (float): frequencies [Hz]
-            instru (Instrument): LISA instrument object
         """
         asd = jnp.atleast_1d(asdTM) # m / s^2 / sqrt(Hz)
         psd_acc = asd**2 * jnp.atleast_1d( (1 + (self.fkneeTM / freqs)**2) * (1.0 + (freqs / 8e-3) ** 4)) # m^2 / s^4 / Hz
@@ -427,7 +441,6 @@ class BaseNoise(GPUobject):
             * 1
             / (self.fs * FMIN) ** 2
         )
-        #psd_lowfreq = jnp.atleast_2d(
         psd_lowfreq = ((asd * CENTRAL_FREQ * self.fkneeTM / (2 * jnp.pi * C)) ** 2
             * jnp.abs(
                 (2 * jnp.pi * FMIN)
@@ -562,32 +575,89 @@ class BaseNoise(GPUobject):
 
     #! AET
     def testmass_A(self, asdTM, freqs):
+        """
+        Calculate the test mass response for channel A.
+        This method computes the test mass response for channel A by multiplying 
+        the transfer function of the test mass for channel A with the filtered 
+        test mass single response.
+        Parameters:
+        asdTM (array-like): Amplitude spectral density of the test mass.
+        freqs (array-like): Frequencies at which the response is calculated.
+        Returns:
+        array-like: The test mass response for channel A.
+        """
 
         return self.tdi_tf_testmass_A(freqs) * self.filtered_testmass_single(asdTM, freqs)
 
     def testmass_T(self, asdTM, freqs):
+        """
+        Calculate the test mass response for channel T.
+        This method computes the test mass response for channel T by multiplying 
+        the transfer function of the test mass for channel T with the filtered 
+        test mass single response.
+        Parameters:
+        asdTM (array-like): Amplitude spectral density of the test mass.
+        freqs (array-like): Frequencies at which the response is calculated.
+        Returns:
+        array-like: The test mass response for channel T.
+        """
+        
         return self.tdi_tf_testmass_T(freqs) * self.filtered_testmass_single(asdTM, freqs)
 
     def oms_A(self, asdOMS, freqs):
+        """
+        Calculate the optical metrology system response for channel A.
+        This method computes the optical metrology system response for channel A by multiplying
+        the transfer function of the optical metrology system for channel A with the filtered
+        optical metrology system single response.
+        Parameters:
+        asdOMS (array-like): Amplitude spectral density of the optical metrology system.
+        freqs (array-like): Frequencies at which the response is calculated.
+        Returns:
+        array-like: The optical metrology system response for channel A.
+        """
         return self.tdi_tf_oms_A(freqs) * self.filtered_oms_in_isi_carrier(asdOMS, freqs)
 
     def oms_T(self, asdOMS, freqs):
+        """
+        Calculate the optical metrology system response for channel T.
+        This method computes the optical metrology system response for channel T by multiplying
+        the transfer function of the optical metrology system for channel T with the filtered
+        optical metrology system single response.
+        Parameters:
+        asdOMS (array-like): Amplitude spectral density of the optical metrology system.
+        freqs (array-like): Frequencies at which the response is calculated.
+        Returns:
+        array-like: The optical metrology system response for channel T.
+        """
         return self.tdi_tf_oms_T(freqs) * self.filtered_oms_in_isi_carrier(asdOMS, freqs)
 
     @partial(jax.jit, static_argnums=(0,))
     def get_SA_base(self, asdTM, asdOMS, freqs):
-        '''
-        Uncorrelated noise in the A, E tdi channels
-        '''
-        #return xp.atleast_2d(testmass_A(asd=asdTM)**2) + xp.atleast_2d(oms_A(asd=asdOMS)**2)
+        """
+        Calculate the sum of the squares of the test mass and optical metrology system acceleration noise.
+        Parameters:
+        asdTM (array-like): Amplitude spectral density of the test mass acceleration noise.
+        asdOMS (array-like): Amplitude spectral density of the optical metrology system acceleration noise.
+        freqs (array-like): Frequencies at which the noise is evaluated.
+        Returns:
+        array-like: Sum of the squares of the test mass and optical metrology system acceleration noise.
+        """
+        
         return self.testmass_A(asdTM, freqs)**2 + self.oms_A(asdOMS, freqs)**2 
     
     @partial(jax.jit, static_argnums=(0,))
     def get_ST_base(self, asdTM, asdOMS, freqs):
-        '''
-        Uncorrelated noise in the T tdi channel
-        '''
-        #return xp.atleast_2d(testmass_T(asd=asdTM)**2) + xp.atleast_2d(oms_T(asd=asdOMS)*2)
+        """
+        Calculate the sum of the squares of the test mass and optical metrology system acceleration noise.
+        Parameters:
+        asdTM (array-like): Amplitude spectral density of the test mass acceleration noise.    
+        asdOMS (array-like): Amplitude spectral density of the optical metrology system acceleration noise.
+        freqs (array-like): Frequencies at which the noise is evaluated.
+        Returns:
+        array-like: Sum of the squares of the test mass and optical metrology system acceleration noise.
+        """
+
         return self.testmass_T(asdTM, freqs)**2 + self.oms_T(asdOMS, freqs)**2 
     
     @partial(jax.jit, static_argnums=(0,))
@@ -630,31 +700,97 @@ class BaseNoise(GPUobject):
     
     #! XYZ
     def testmass_XX(self, asdTM, freqs):
+        """
+        Calculate the test mass XX response.
+        This method computes the test mass XX response by multiplying the 
+        transfer function of the test mass XX with the filtered test mass 
+        single response.
+        Parameters:
+        asdTM : array-like
+            The amplitude spectral density of the test mass.
+        freqs : array-like
+            The frequency values at which the response is calculated.
+        Returns:
+        array-like
+            The calculated test mass XX response.
+        """
+        
         return self.tdi_tf_testmass_XX(freqs) * self.filtered_testmass_single(asdTM, freqs)
 
     def testmass_XY(self,asdTM, freqs):
+        """
+        Calculate the test mass XY response.
+        This function computes the test mass XY response by multiplying the 
+        transfer function of the test mass XY with the square of the filtered 
+        test mass single.
+        Parameters:
+        asdTM (array-like): Amplitude spectral density of the test mass.
+        freqs (array-like): Frequencies at which the response is calculated.
+        Returns:
+        array-like: The test mass XY response.
+        """
+
         return self.tdi_tf_testmass_XY2(freqs) * self.filtered_testmass_single(asdTM, freqs)**2
 
     def oms_XX(self, asdOMS, freqs):
+        """
+        Calculate the output of the oms_XX function.
+        This function computes the product of the transfer function of the 
+        time delay interferometry (TDI) for the oms_XX channel and the 
+        filtered optical metrology system (OMS) input in the inter-satellite 
+        interferometer (ISI) carrier.
+        Parameters:
+        asdOMS (array-like): The amplitude spectral density (ASD) of the OMS.
+        freqs (array-like): The frequency array.
+        Returns:
+        array-like: The result of the oms_XX calculation.
+        """
+
         return self.tdi_tf_oms_XX(freqs) * self.filtered_oms_in_isi_carrier(asdOMS, freqs)
 
     def oms_XY(self, asdOMS, freqs):
+        """
+        Calculate the OMS XY component.
+        This method computes the OMS XY component by multiplying the result of 
+        `tdi_tf_oms_XY2` with the square of the result from `filtered_oms_in_isi_carrier`.
+        Args:
+            asdOMS (array-like): The amplitude spectral density of the OMS.
+            freqs (array-like): The frequencies at which to evaluate the OMS XY component.
+        Returns:
+            array-like: The computed OMS XY component.
+        """
+
         return self.tdi_tf_oms_XY2(freqs) * self.filtered_oms_in_isi_carrier(asdOMS, freqs)**2
 
     @partial(jax.jit, static_argnums=(0,))
     def get_SXX(self, asdTM, asdOMS, freqs):
-        '''
-        noise in the XX, YY, ZZ tdi channels
-        '''
-        #return xp.atleast_2d(testmass_A(asd=asdTM)**2) + xp.atleast_2d(oms_A(asd=asdOMS)**2)
+        """
+        Calculate the SXX power spectral density.
+        This function computes the SXX power spectral density by summing the 
+        squared values of the test mass and optical metrology system (OMS) 
+        contributions.
+        Parameters:
+        asdTM (array-like): Amplitude spectral density of the test mass.
+        asdOMS (array-like): Amplitude spectral density of the optical metrology system.
+        freqs (array-like): Frequencies at which the spectral densities are evaluated.
+        Returns:
+        array-like: The SXX power spectral density.
+        """
+        
         return self.testmass_XX(asdTM, freqs)**2 + self.oms_XX(asdOMS, freqs)**2 
 
     @partial(jax.jit, static_argnums=(0,))
     def get_SXY(self, asdTM, asdOMS, freqs):
-        '''
-        noise in the XY, XZ, YZ tdi channels
-        '''
-        #return xp.atleast_2d(testmass_T(asd=asdTM)**2) + xp.atleast_2d(oms_T(asd=asdOMS)*2)
+        """
+        Calculate the combined SXY value from test mass and optical metrology system (OMS) data.
+        Parameters:
+        asdTM (array-like): Amplitude spectral density data for the test mass.
+        asdOMS (array-like): Amplitude spectral density data for the optical metrology system.
+        freqs (array-like): Frequency values corresponding to the ASD data.
+        Returns:
+        array-like: Combined SXY value calculated from the test mass and OMS data.
+        """
+        
         return (self.testmass_XY(asdTM, freqs) + self.oms_XY(asdOMS, freqs))
     
     def setup_noise(self):
@@ -729,84 +865,6 @@ class BaseNoise(GPUobject):
         else:
             return self.compute_PSDS(asdTM, asdOMS, freqs)
 
-
-# class SciRDv1(BaseNoise):
-#     def __init__(self, T=1.0, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', interpkwargs=dict(kind='akima', axis=1), **kwargs):
-#         asdTM = 3.0e-15
-#         asdOMS = 15.0e-12
-#         fkneeTM = 4e-4
-#         fkneeOMS = 2e-3
-
-#         # custom_armlength = 2.5e9 / C
-
-#         BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, fkneeTM=fkneeTM, fkneeOMS=fkneeOMS, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs)
-
-#     def testmass_single(self, asdTM, freqs):
-#         """
-#         Model for single TM noise PSD including filters used in the data generation
-        
-#         Args:
-#             freqs (float): frequencies [Hz]
-#             instru (Instrument): LISA instrument object
-#         """
-#         asd = jnp.atleast_1d(asdTM) # m / s^2 / sqrt(Hz)
-#         psd_acc = asd**2 * jnp.atleast_1d( (1 + (self.fkneeTM / freqs)**2) * (1.0 + (freqs / 8e-3) ** 4)) # m^2 / s^4 / Hz
-
-#         if self.units == 'hertz':
-#             psd_hertz = jnp.atleast_1d(CENTRAL_FREQ / (2 * jnp.pi * C * freqs))**2 * psd_acc
-#             return jnp.sqrt(psd_hertz)
-
-#         elif self.units == 'meters':
-#             psd_meters = jnp.atleast_1d(2 * jnp.pi * freqs)**(-4) * psd_acc
-#             return jnp.sqrt(psd_meters)
-        
-#         elif self.units == 'strain':
-#             psd_strain = jnp.atleast_1d(1 / (2 * jnp.pi * C * freqs))**2 * psd_acc
-#             return jnp.sqrt(psd_strain)
-
-#         else:
-#             raise ValueError('units must be `hertz`, `meters` or `strain`')
-        
-#     @partial(jax.jit, static_argnums=(0,))
-#     def get_SA(self, asdTM, asdOMS, freqs):
-#         '''
-#         Uncorrelated noise in the A, E tdi channels. Code from: https://mikekatz04.github.io/LISAanalysistools/build/html/index.html#
-#         '''
-
-#         x = 2.0 * np.pi * self.armlength * freqs
-
-#         Spm = self.testmass_single(asdTM, freqs) ** 2
-#         Sop = self.oms_in_isi_carrier(asdOMS, freqs) ** 2
-
-#         Sa = (
-#             8.0
-#             * jnp.sin(x) ** 2
-#             * (
-#                 2.0 * Spm * (3.0 + 2.0 * jnp.cos(x) + jnp.cos(2 * x))
-#                 + Sop * (2.0 + jnp.cos(x))
-#             )
-#         )
-
-#         return Sa
-        
-    
-#     @partial(jax.jit, static_argnums=(0,))
-#     def get_ST(self, asdTM, asdOMS, freqs):
-#         '''
-#         Uncorrelated noise in the T tdi channel. Code from: https://mikekatz04.github.io/LISAanalysistools/build/html/index.html#
-#         '''
-#         x = 2.0 * np.pi * self.armlength * freqs
-
-#         Spm = self.testmass_single(asdTM, freqs) ** 2
-#         Sop = self.oms_in_isi_carrier(asdOMS, freqs) ** 2
-
-#         return (
-#             16.0 * Sop * (1.0 - jnp.cos(x)) * jnp.sin(x) ** 2
-#             + 128.0 * Spm * jnp.sin(x) ** 2 * jnp.sin(0.5 * x) ** 4
-#         )
-        
-
-
 class TDIresponse(GPUobject):
     """
     Represents the response of a TDI (Time Delay Interferometry) system.
@@ -852,6 +910,7 @@ class TDIresponse(GPUobject):
         
         Args:
             freqs (array-like): The frequencies at which to calculate the TDI response.
+            return_jax (bool, optional): Flag indicating whether to return the response as a JAX array. Default: `True`.
             return_gpu (bool, optional): Flag indicating whether to return the response as a GPU array. Default: `True`.
         
         Returns:
@@ -874,7 +933,10 @@ class TDIresponse(GPUobject):
                     return response
 
 class DataContainer(GPUobject):
-
+    """
+    Store the time or frequency domain data and perform the necessary operations.
+    This class is heavily based on the classes contained in the `datacontainer.py` file from the `lisatools` package (https://mikekatz04.github.io/LISAanalysistools/build/html/user/datacontainer.html).
+    """
     def __init__(self, 
                 t=None,
                 d=None,
@@ -890,7 +952,28 @@ class DataContainer(GPUobject):
                 window=('kaiser', 30),
                 use_gpu=False,
                 ):
-        
+        """
+        Initialize the object with provided parameters.
+        Parameters:
+        t (array-like, optional): Time domain data.
+        d (array-like, optional): Data in the time domain.
+        freqs (array-like, optional): Frequency domain data.
+        dtilde (array-like, optional): Data in the frequency domain.
+        weights (array-like, optional): Weights for the data.
+        nchannels (int, optional): Number of channels. Default is 3.
+        fmin (float, optional): Minimum frequency. Default is 1e-4.
+        fmax (float, optional): Maximum frequency. Default is 2.9e-2.
+        average (bool, optional): Whether to average the periodogram. Default is False.
+        f_segments (float, optional): Frequency segments for averaging. Default is 1e-5.
+        fullmatrix (bool, optional): Whether to use the full matrix. Default is False.
+        window (tuple, optional): Window function and its parameter. Default is ('kaiser', 30).
+        use_gpu (bool, optional): Whether to use GPU for computations. Default is False.
+        Raises:
+        ValueError: If neither time nor frequency data is provided.
+        ValueError: If neither time domain nor frequency domain data is provided.
+        AssertionError: If dimensionality of data does not match the expected shape.
+        """
+
         GPUobject.__init__(self, use_gpu=use_gpu)
 
         self.nchannels = nchannels
@@ -942,7 +1025,7 @@ class DataContainer(GPUobject):
 
             freqs, P, sizes = self.average_periodogram(P, freqs, f_segments)
 
-            self.frequencymask = (freqs > self.fmin) & (freqs < self.fmax) # remove ALL the wiggles CAREFULL: we MUST find a way to include them
+            self.frequencymask = (freqs > self.fmin) & (freqs < self.fmax) # here to remove the zeros of the transfer functions. #todo: work on a way not to waste all these data
             self.freqs = jnp.real(jnp.array(freqs[self.frequencymask]))
 
             if hasattr(self, 'df'):
@@ -957,13 +1040,8 @@ class DataContainer(GPUobject):
 
             if self.fullmatrix:
                 self.Y = self.nu[None, :, None, None] * self.periodgram[None, :, :, :]
-                #norm = self.xp.sum((self.nu - p) * self.xp.log(self.xp.linalg.det(self.Y)).real) # p = # of channels
             else:
                 self.Y = self.nu[None, :, None] * self.periodgram[None, :, :]
-                #norm = self.xp.sum((self.nu - p) * self.xp.sum(self.xp.log(self.Y), axis=-1)) # p = # of channels
-            
-            #norm += self.xp.sum((self.nu - p) * p * self.xp.log(self.nu)) 
-            #self.norm = norm
 
             self.dtildedtilde = None
 
@@ -983,6 +1061,19 @@ class DataContainer(GPUobject):
             self.weights = jnp.ones_like(self.dtilde)[None, :, :]
 
     def get_Xtilde(self, d=None):
+        """
+        Compute the normalized Xtilde based on the domain (time or frequency).
+        Parameters:
+        d (array-like, optional): Input data array. If None, defaults to self.d for 'time' domain
+                                  or self.dtilde for 'frequency' domain.
+        Returns:
+        jnp.ndarray: The normalized Xtilde array.
+        Notes:
+        - For 'time' domain, the normalization factor is computed using the time step (self.dt) and the window function.
+        - For 'frequency' domain, the normalization factor is computed using the frequency step (self.df).
+        - The normalization follows the method described in arXiv:2302.12573.
+        """
+        
         if self.domain == 'time':
             if d is None:
                 d = self.d
@@ -994,23 +1085,34 @@ class DataContainer(GPUobject):
             if d is None:
                 d = self.dtilde
 
-            #d = d[self.frequencymask, :]
             norm = 2.0 * self.df
 
-            #window = np.fft.fft(self.window, n=d.shape[0])
             Xtilde = jnp.asarray(d * np.sqrt(norm)) #ALREADY NORMALIZED, refer to arXiv:2302.12573
         return Xtilde
 
     
     def get_XtildeXtilde(self, dtilde=None):
+        """
+        Compute the XtildeXtilde matrix.
+        Parameters:
+        -----------
+        dtilde : array-like, optional
+            The input array for which the XtildeXtilde matrix is computed. If not provided, 
+            the instance's `dtilde` attribute is used.
+        Returns:
+        --------
+        jnp.ndarray
+            The computed XtildeXtilde matrix. If `fullmatrix` is True, the result is a 
+            4-dimensional array vectorized over axis 0. If `fullmatrix` is False, the 
+            result is a 3-dimensional array vectorized over axis 0.
+        """
+
         if dtilde is None:
             dtilde = self.dtilde
         if self.fullmatrix:
             return jnp.einsum('...i,...j->...ij', jnp.conj(dtilde), dtilde)[jnp.newaxis, :, :, :] #vectorized over axis 0
-            #return self.xp.real(self.xp.einsum('...i,...j->...ij', self.xp.conj(dtilde), dtilde))[self.xp.newaxis, :, :, :] #vectorized over axis 0
         else:
             return  jnp.abs(jnp.conj(dtilde) * dtilde)[jnp.newaxis, :, :] #vectorized over axis 0
-            #return self.xp.real(self.xp.conj(dtilde) * dtilde)[self.xp.newaxis, :, :] #vectorized over axis 
 
     def periodogram_matrix(self, data_fd):
         """
@@ -1018,15 +1120,9 @@ class DataContainer(GPUobject):
         
         Parameters
         ----------
-        data_td : array
-            The data in time domain to compute the periodogram matrix of.
         data_fd : array
             The data in frequency domain to compute the periodogram matrix of.
-        fs : float
-            The sampling frequency of the data.
-        wd_func : function
-            The window function to apply to the data.
-            
+    
         Returns
         -------
         P : array
@@ -1042,53 +1138,10 @@ class DataContainer(GPUobject):
             P = jnp.einsum('...ii->...i', P)
         
         return P
-    '''
     
-    def periodogram_matrix(self, data_td, data_fd=None, fs=None, wd_func=('kaiser', 30)):
-        #todo fix time and frequency domains
-        """
-        Compute the periodogram matrix of the data.
-        
-        Parameters
-        ----------
-        data_td : array
-            The data in time domain to compute the periodogram matrix of.
-        data_fd : array
-            The data in frequency domain to compute the periodogram matrix of.
-        fs : float
-            The sampling frequency of the data.
-        wd_func : function
-            The window function to apply to the data.
-            
-        Returns
-        -------
-        P : array
-            The periodogram matrix of the data.
-        """
-        if data_fd is not None:
-            dtilde = data_fd[:,:, None]
-        else:
-            # Get the number of data points.
-            n = data_td.shape[0]
-            
-            # Compute the window function.
-            wd, nenbw = self.get_window(wd_func, n)
-            k2 = jnp.sum(wd**2)
-            norm = jnp.sqrt(2 / (fs * k2))    
-            # Compute the periodogram matrix.
-            dtilde = (jnp.fft.fft(data_td * wd[:, None], axis=0) * norm)[:,:, None]
-        dtilde_conj = jnp.conj(dtilde)
-
-        P = (dtilde @ dtilde_conj.transpose(0, 2, 1))
-
-        if not self.fullmatrix:
-            P = jnp.einsum('...ii->...i', P)
-
-        return P
-    '''
     def average_periodogram(self, P, freqs, f_seg):
         """
-        Average the periodogram matrix over segments.
+        Average the periodogram matrix over segments. Snippet credits: Nikolaos Karnesis.
         
         Parameters
         ----------
@@ -1096,8 +1149,6 @@ class DataContainer(GPUobject):
             The periodogram matrix to average.
         freqs : array
             The frequencies of the periodogram matrix.
-        fs : float
-            The sampling frequency of the data.
         f_seg : float
             The segment frequency.
             
@@ -1140,89 +1191,31 @@ class DataContainer(GPUobject):
         return freqs_h, P_avg, segment_sizes
        
 
-    def smooth_old(self, y, fs, f_seg, weights_func=None):
+    def get_window(self, window_func, n):
         """
-        Smooth the unbiased log-periodogram data y.
-        Can be either the log raw periodogram + gamma,
-        or its expectation.
+        Compute the window function and the normalized equivalent noise bandwidth.
 
         Parameters
         ----------
-        y : ndarray
-            unbiased log-periodogram array, size n_freq x n_channels
-        fs : float
-            sampling frequency
-        f_seg : float or ndarray
-            segment frequencies
-
+        window_func : str, tuple, or callable, optional
+            The window function to use. If None, a rectangular window is used.
+        n : int
+            The length of the window.
+        
         Returns
         -------
-        freqs_h : ndarray
-            frequencies where the smoothed log-periodogram is computed
-        p_h : ndarray
-            smoothed periodogram at frequencies freqs_h
-        segment_sizes : float or ndarray
-            Sizes of the frequency segments
+        window : array
+            The window function.
+        nenbw : float
+            The normalized equivalent noise bandwidth.
+        
+        Notes
+        -----
+        The normalized equivalent noise bandwidth (nenbw) is defined as:
+        .. math::
+            \\text{nenbw} = \\frac{N \\sum w^2}{(\\sum w)^2}
+        where :math:`N` is the length of the window and :math:`w` is the window function.
         """
-        warnings.warn("This function is deprecated. Use `average_periodgram` instead.", DeprecationWarning)
-        x_shape = y.shape
-        freqs = jnp.fft.fftfreq(x_shape[0]) * fs
-        #y = self.xp.asarray(y)
-
-        # Observation duration
-        t_obs = x_shape[0] / fs
-        if isinstance(f_seg, float):
-            # Smoothing bandwidth
-            bandwidth = int(f_seg / (fs/x_shape[0]))
-            # Segment frequencies
-            f_seg_arr = freqs[freqs>=0][0::bandwidth]
-        elif isinstance(f_seg, (jnp.ndarray, list)):
-            f_seg_arr = jnp.asarray(f_seg)
-        else:
-            raise TypeError("f0 should be a float or array_like")
-        # Number of segments
-        n_seg = len(f_seg_arr)
-        # Indices of the segment bounds
-        i_seg = np.round(f_seg_arr * t_obs).astype(int)
-        # Sizes of all intervals
-        segment_sizes = i_seg[1:] - i_seg[:-1]
-        # Middle frequencies
-        freqs_h = (f_seg_arr[:-1] + f_seg_arr[1:]) / 2.0
-        # Weighting?
-        if weights_func is None:
-            weights_func = jnp.ones
-
-        weights_vector = [weights_func(ss) for ss in segment_sizes]
-
-        if len(np.shape(y)) == 3:
-            # Compute the averages over each segment
-            p_h = jnp.array(
-                [jnp.sum(y[i_seg[j]:i_seg[j+1]]*weights_vector[j][:, jnp.newaxis, jnp.newaxis], 
-                        axis=0)/jnp.sum(weights_vector[j])
-                for j in range(n_seg-1)], dtype=y.dtype)
-
-        elif len(jnp.shape(y)) == 2:
-            p_h = jnp.array(
-                [jnp.sum(y[i_seg[j]:i_seg[j+1]]*weights_vector[j][:, jnp.newaxis], 
-                        axis=0)/jnp.sum(weights_vector[j])
-                for j in range(n_seg-1)], dtype=y.dtype)
-
-        elif len(np.shape(y)) == 1:
-            p_h = self.xp.array(
-                [jnp.sum(y[i_seg[j]:i_seg[j+1]]*weights_vector[j], 
-                        axis=0)/jnp.sum(weights_vector[j])
-                for j in range(n_seg-1)], dtype=y.dtype)
-
-        freqmask = (freqs_h >= self.fmin) & (freqs_h <= self.fmax)
-
-        segment_sizes = jnp.asarray(segment_sizes[freqmask])
-        p_h = p_h[freqmask]
-        freqs_h = jnp.asarray(freqs_h[freqmask])
-
-        return freqs_h, p_h, segment_sizes
-
-    def get_window(self, window_func, n):
-
         if window_func is None:
             window = np.ones(n)
 
