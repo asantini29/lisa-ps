@@ -8,59 +8,46 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from functools import partial
-from pysco import utils
 
 jax.config.update("jax_enable_x64", True)
 
 import warnings
 
+#todo: clean and document the gaussian bump functions
+
 class Psd(BaseNoise, StochasticContribution):
     """
-    Psd class for handling power spectral densities (PSDs) with various perturbations and contributions.
-    This class inherits from BaseNoise and StochasticContribution and provides methods to compute and modify PSDs using spline or constant models. It also supports background and foreground contributions.
+    A class to represent the Power Spectral Density (PSD) of a noise model.
+    Inherits from:
+        BaseNoise: Base class for noise models.
+        StochasticContribution: Base class for stochastic contributions.
     Attributes:
         kwargs (dict): Additional keyword arguments.
-        PSDS_design (None): Placeholder for PSD design.
+        PSDS_design (None): Placeholder for the PSD design.
         fmin (float): Minimum frequency.
         fmax (float): Maximum frequency.
         logfmin (float): Logarithm of the minimum frequency.
         logfmax (float): Logarithm of the maximum frequency.
-        fitASDs (bool): Flag to fit amplitude spectral densities (ASDs).
+        fitASDs (bool): Flag to fit Amplitude Spectral Densities (ASDs).
         ftol (float): Tolerance for frequency differences.
-        noiseperturbation (bool): Flag for noise perturbation.
-        backgroundperturbation (bool): Flag for background perturbation.
-        foregroundperturbation (bool): Flag for foreground perturbation.
     Methods:
-        __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fmin=1e-4, fmax=2.9e-2, T=1.0, fs=None, equal_arms=False, custom_armlength=None, Ncov=None, channels=None, use_gpu=False, units='hertz', noiseless=False, perturbation={'noise':False, 'background':False, 'foreground':False}, interpkwargs=None, fitASDs=False, backgrounds=[], background_kwargs={}, foregrounds=[], foreground_kwargs={}, isotropicresponse=None, GBresponse=None, correct_sagnac=True, ftol=0.1, scirdv1=False, **kwargs):
-            Initializes the Psd class with given parameters.
-        noiseperturbation(self):
-            Getter for noise perturbation.
-        noiseperturbation(self, value):
-            Setter for noise perturbation.
-        backgroundperturbation(self):
-            Getter for background perturbation.
-        backgroundperturbation(self, value):
-            Setter for background perturbation.
-        foregroundperturbation(self):
-            Getter for foreground perturbation.
-        foregroundperturbation(self, value):
-            Setter for foreground perturbation.
-        update_perturbation(self, perturbation):
-            Updates the spline perturbation.
-        set_noisefn(self):
-            Sets the noise function based on perturbation and fitting flags.
-        constmod(self, freqs, args, **kwargs):
-            Constant model for PSDs.
-        splinemod(self, freqs, args, groups, knots=None, **kwargs):
-            Applies spline modification to the input PSDs.
-        logperturbation(self, freqs, knots, weights):
-            Computes the spline perturbation.
-        logperturbation_numba(self, freqs, knots, weights):
-            Computes the spline perturbation using numba.
-        prepare_interp_input_numba(self, args, groups):
-            Prepares input for spline interpolation using numba.
-        __call__(self, freqs, noiseargs=[], backargs=[], foreargs=[], noisegroups=[], backgroups=[], foregroups=[], **kwargs):
-            Computes the total PSD in each channel.
+        noiseperturbation: Property to get/set noise perturbation.
+        backgroundperturbation: Property to get/set background perturbation.
+        foregroundperturbation: Property to get/set foreground perturbation.
+        update_perturbation(perturbation): Update the spline perturbation.
+        set_noisefn(): Set the noise function based on perturbation and fitting flags.
+        constmod(freqs, args, **kwargs): Compute constant model PSDs.
+        splinemod(freqs, args, groups, knots=None, **kwargs): Apply spline modification to the input PSDs.
+        logperturbation(freqs, knots, weights): Compute spline perturbation.
+        logperturbation_numba(freqs, knots, weights): Compute spline perturbation with numba cuda kernel.
+        prepare_interp_input_numba(args, groups): Prepare input for spline interpolation with numba.
+        gaussian_bump(freq, A, f_center, width): Compute Gaussian bump.
+        gaussian_bump_sum(freq, A, f_center, width): Compute sum of Gaussian bumps.
+        gaussian_bump_rj(freq, args, groups): Compute Gaussian bump with reversible jump.
+        log_gaussian_bump(freq, A, f_center, width): Compute log-Gaussian bump.
+        log_gaussian_bump_sum(freq, A, f_center, width): Compute sum of log-Gaussian bumps.
+        log_gaussian_bump_rj(freq, args, groups, nin): Compute log-Gaussian bump with reversible jump.
+        __call__(freqs, noiseargs=[], backargs=[], foreargs=[], noisegroups=[], backgroups=[], foregroups=[], **kwargs): Compute the total PSD in each channel.
     """
     
     def __init__(self, 
@@ -92,7 +79,65 @@ class Psd(BaseNoise, StochasticContribution):
                  pixelPSD=False,
                  **kwargs
                  ):
-        
+        """
+        Initialize the PSD class.
+        Parameters:
+        -----------
+        asdTM : float, optional
+            Amplitude spectral density for test mass noise (default is 2.4e-15).
+        asdOMS : float, optional
+            Amplitude spectral density for optical metrology system noise (default is 7.9e-12).
+        fmin : float, optional
+            Minimum frequency (default is 1e-4).
+        fmax : float, optional
+            Maximum frequency (default is 2.9e-2).
+        T : float, optional
+            Observation time in years (default is 1.0).
+        fs : float or None, optional
+            Sampling frequency (default is None).
+        equal_arms : bool, optional
+            If True, assumes equal arm lengths (default is False).
+        custom_armlength : float or None, optional
+            Custom arm length (default is None).
+        Ncov : int or None, optional
+            Number of covariance matrices (default is None).
+        channels : list or None, optional
+            List of channels (default is None).
+        use_gpu : bool, optional
+            If True, use GPU for computations (default is False).
+        units : str, optional
+            Units for frequency ('hertz' or 'radians') (default is 'hertz').
+        noiseless : bool, optional
+            If True, assumes noiseless data (default is False).
+        perturbation : dict, optional
+            Dictionary specifying perturbation types (default is {'noise': False, 'background': False, 'foreground': False}).
+        interpkwargs : dict or None, optional
+            Keyword arguments for interpolation (default is None).
+        fitASDs : bool, optional
+            If True, fit amplitude spectral densities (default is False).
+        backgrounds : list, optional
+            List of background noise sources (default is []).
+        background_kwargs : dict, optional
+            Keyword arguments for background noise sources (default is {}).
+        foregrounds : list, optional
+            List of foreground noise sources (default is []).
+        foreground_kwargs : dict, optional
+            Keyword arguments for foreground noise sources (default is {}).
+        isotropicresponse : callable or None, optional
+            Function for isotropic response (default is None).
+        GBresponse : callable or None, optional
+            Function for galactic binary response (default is None).
+        correct_sagnac : bool, optional
+            If True, correct for Sagnac effect (default is True).
+        ftol : float, optional
+            Tolerance for fitting (default is 0.1).
+        scirdv1 : bool, optional
+            If True, use SCIRDV1 (default is False).
+        pixelPSD : bool, optional
+            If True, use pixel PSD (default is False).
+        **kwargs : dict
+            Additional keyword arguments.
+        """
         self.kwargs = kwargs.copy()
         if 'perturbation_type' not in kwargs:
             self.kwargs['perturbation_type'] = 'spline'
@@ -134,8 +179,6 @@ class Psd(BaseNoise, StochasticContribution):
         self.logfmin = self.xp.log10(self.fmin)
         self.logfmax = self.xp.log10(self.fmax)
 
-        # freqs = freqs
-
         self.fitASDs = fitASDs
         self.update_perturbation(perturbation)
 
@@ -169,17 +212,31 @@ class Psd(BaseNoise, StochasticContribution):
         self._foregroundperturbation = value
 
     def update_perturbation(self, perturbation):
-        '''
-        Update the spline perturbation.
-        '''
+        """
+        Update the psd perturbation.
+
+        Parameters:
+        - perturbation (dict): Dictionary specifying the perturbation types.
+        """
+
         assert isinstance(perturbation, dict), '`perturbation` must be a dictionary'
         self.noiseperturbation = perturbation['noise']
         self.backgroundperturbation = perturbation['background']
         self.foregroundperturbation = perturbation['foreground']
         self.set_noisefn()
-        print('Using ' + self.noisefn.__name__)
 
     def set_noisefn(self):
+        """
+        Sets the noise function for the instance based on the current configuration.
+        This method determines which noise function to use based on the attributes
+        `noiseperturbation` and `fitASDs`. The possible noise functions that can be
+        set are `splinemod`, `constmod`, or `set_PSDS`.
+        - If `noiseperturbation` is True, the noise function is set to `splinemod`.
+        - If `noiseperturbation` is False and `fitASDs` is True, the noise function
+          is set to `constmod`.
+        - If both `noiseperturbation` and `fitASDs` are False, the noise function
+          is set to `set_PSDS`.
+        """
 
         if self.noiseperturbation:
             self.noisefn = self.splinemod
@@ -192,6 +249,21 @@ class Psd(BaseNoise, StochasticContribution):
 
 
     def constmod(self, freqs,  args, **kwargs):
+        """
+        Compute the Power Spectral Density (PSD) for given frequencies and arguments.
+        Parameters:
+        -----------
+        freqs : array-like
+            Array of frequency values.
+        args : array-like
+            Array of arguments where the first dimension corresponds to different sets of parameters.
+        **kwargs : dict
+            Additional keyword arguments.
+        Returns:
+        --------
+        PSDS : jnp.ndarray
+            Computed PSD values. The shape of the output depends on the shape of the input arguments.
+        """
 
         freqs = jnp.asarray(freqs)
         args = args[0]
@@ -211,7 +283,7 @@ class Psd(BaseNoise, StochasticContribution):
         return PSDS
     
     def splinemod(self, freqs, args, groups, knots=None, **kwargs):
-        '''
+        """
         Applies spline modification to the input power spectral densities (PSDs).
 
         Parameters:
@@ -223,7 +295,7 @@ class Psd(BaseNoise, StochasticContribution):
 
         Returns:
         - PSDS (ndarray): Modified PSDs with shape (n_in, len(freqs), Ncov).
-        '''
+        """
         
         if self.fitASDs:
             PSDS = self.constmod(freqs, args[:1])    
@@ -240,12 +312,8 @@ class Psd(BaseNoise, StochasticContribution):
             groups = [groups]
             
         nin = min([arg.shape[0] for arg in args])
-        #PSDS = self.xp.empty((nin, len(freqs), self.Ncov))
 
         knots, weights = self.prepare_interp_input_numba(args=args, groups=groups)
-        # breakpoint()
-        # ftol_mask = self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1)
-        # ftol_mask = self.xp.broadcast_to(ftol_mask, (freqs.shape[0], self.Ncov, nin)).transpose(2, 0, 1)
 
         ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1), axis=0)
         
@@ -261,27 +329,62 @@ class Psd(BaseNoise, StochasticContribution):
         return PSDS
     
     def logperturbation(self, freqs, knots, weights):
-        '''
-        Spline perturbation.
-        '''
+        """
+        Apply a log perturbation to the given frequencies using the specified knots and weights.
+        Parameters:
+        -----------
+        freqs : array-like
+            The frequencies at which to apply the log perturbation.
+        knots : array-like
+            The knot points for the interpolation.
+        weights : array-like
+            The weights for the interpolation.
+        Returns:
+        --------
+        logperturbation : ndarray
+            The log perturbation applied to the frequencies, reshaped to match the shape of the PSDs.
+        """
+        
         interp = self.interp(knots, weights, **self.interpkwargs)
         logperturbation = (interp(self.xp.log10(freqs))).reshape(-1, len(freqs), weights.shape[0]) #put it in the same shape of PSDS
         
         return logperturbation
     
     def logperturbation_numba(self, freqs, knots, weights):
-        '''
-        Spline perturbation with numba cuda kernel.
-        '''
+        """
+        Compute the log perturbation using numba (or numba CUDA if possible) for performance optimization.
+        Parameters:
+        freqs (array-like): Array of frequency values.
+        knots (array-like): Array of knot points for interpolation.
+        weights (array-like): Array of weights for interpolation.
+        Returns:
+        numpy.ndarray: Transposed log perturbation array with shape (n_knots, n_weights, n_freqs).
+        """
+        
         logperturbation = self.interp(self.xp.log10(freqs), knots, weights)
 
         return logperturbation.transpose(1, 2, 0)
     
     def prepare_interp_input_numba(self, args, groups):
-        '''
-        here args is a list of the fashion [ (edges), (knots_i) ]
-        I want the output to be (knots position, knots weights)
-        '''
+        """
+        Prepares the input data for interpolation using Numba.
+        Parameters:
+        -----------
+        args : list
+            A list of arrays where the first element contains the edges and weights, 
+            and the subsequent elements contain the knots. The shape of the arrays 
+            determines the processing path.
+        groups : list
+            A list of arrays where the first element contains the group indices for 
+            the edges and weights, and the subsequent elements contain the group 
+            indices for the knots.
+        Returns:
+        --------
+        sortedpositions : ndarray
+            An array of sorted positions for interpolation.
+        sortedweights : ndarray
+            An array of sorted weights corresponding to the sorted positions.
+        """
 
         if (args[1].shape[-1] == self.Ncov + 1) or (len(args) == 2): # this means all the weights are together or there is only one spline
             edges_weights, knots_full = self.xp.asarray(args[0]), self.xp.asarray(args[1]) #always work along the `1` axis for frequency operations # TODO may have to change this, maybe (Ncov, Nin, Nfreq) is better
@@ -303,15 +406,11 @@ class Psd(BaseNoise, StochasticContribution):
             maxgroups = group_count.max().item()
 
             knots_full_nans = self.xp.full((ngroups, maxgroups, knots_full.shape[-1]), self.xp.nan)
-            #breakpoint()
             leftedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmin), leftedge_full), axis=1)[:, None, :]
             rightedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmax), rightedge_full), axis=1)[:, None, :]
 
             knots_full_nans[(groups_knots, inds_per_group)] = knots_full
-            # for i, g in enumerate(groups_unique):
-            #     #breakpoint()
-            #     knots_full_nans[i, :groups_count[i]] = knots_full[groups_knots == g]
-
+        
             knots_full_nans = self.xp.concatenate((leftedge_full, knots_full_nans, rightedge_full), axis = 1)
 
             positions = knots_full_nans[:,:,:1]
@@ -470,10 +569,6 @@ class Psd(BaseNoise, StochasticContribution):
         width_full = jnp.array(width_full)#[finite_mask])
 
         bump = self.log_gaussian_bump_sum(freq, A_full, f_center_full, width_full)
-
-        #ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(f_center_full[finite_mask], axis=1)) < self.ftol, axis=1), axis=0)
-        #ftol_mask = self.xp.any(self.xp.abs(self.xp.diff(f_center_full, axis=1)) < self.ftol, axis=1)
-        #bump.at[ftol_mask].set(jnp.nan)
         
         return bump
                 
@@ -497,8 +592,6 @@ class Psd(BaseNoise, StochasticContribution):
 
         '''
         PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
-
-        #breakpoint()  
         
         if self.nbackgrounds > 0:
             
@@ -530,12 +623,8 @@ class Psd(BaseNoise, StochasticContribution):
 
                         h2omega = h2omega * perturbation
 
-                    #h2omega = jnp.repeat(h2omega, self.Ncov, axis=-1)
-                    #breakpoint()
                     Shs = self.convert_to_psd(freqs, h2omega)
                     Shs = self.convert_units(freqs, Shs)
-                    #Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
-                    #Shs = self.xp.array(Sh).transpose(1, 2, 0)
                 
                 sgwbs_all = sgwbs_all + Shs   
 
@@ -570,7 +659,6 @@ class Psd(BaseNoise, StochasticContribution):
                         Shs = Shs * perturbation
 
                     elif self.kwargs['perturbation_type'] == 'bump':
-                        #breakpoint()
                         bump_args, bump_groups = foreargs[self.nforegrounds+j:self.nforegrounds+(j+1)][0], foregroups[self.nforegrounds+j:self.nforegrounds+(j+1)][0]
                         bumps = self.log_gaussian_bump_rj(freqs, bump_args, bump_groups, nin) 
                         Shs = Shs + bumps[:,:,None]
@@ -578,11 +666,7 @@ class Psd(BaseNoise, StochasticContribution):
                     else:
                         raise ValueError('Invalid perturbation type')
 
-                    
-
                 Shs = self.convert_units(freqs, Shs)
-                #Sh = [self.convert_to_psd(freqs, h2omega) for i in range(self.Ncov)]
-                #Shs = self.xp.array(Sh).transpose(1, 2, 0)
 
                 PSDS = PSDS + Shs * response 
 

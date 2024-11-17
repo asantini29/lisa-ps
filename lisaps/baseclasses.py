@@ -3,7 +3,6 @@ from typing import Callable
 import numpy as np
 import pickle
 
-import os
 
 try:
     import cupy as xp
