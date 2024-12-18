@@ -90,6 +90,8 @@ class StochasticContribution(GPUobject):
         self.armlength = ARMLENGTH_EQUAL if equal_arms else ARMLENGTH_AVERAGE
 
         if channels is not None:
+            if not isinstance(channels, list):
+                channels = [channels]
             self.channels = channels
         else:
             if TDIsetup == 'AET':

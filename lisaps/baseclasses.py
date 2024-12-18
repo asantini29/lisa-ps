@@ -1161,14 +1161,14 @@ class DataContainer(GPUobject):
             The sizes of the frequency segments.
         """
 
+        df = (freqs[1] - freqs[0])
         if isinstance(f_seg, float):
-            df = (freqs[1] - freqs[0])
             # Smoothing bandwidth
             bandwidth = int(f_seg / df)
             # Segment frequencies
             f_seg_arr = freqs[0::bandwidth]
             f_seg_arr = jnp.concatenate((f_seg_arr, jnp.atleast_1d(freqs[-1])))
-        elif isinstance(f_seg, (jnp.ndarray, list)):
+        elif hasattr(f_seg, '__array__') or isinstance(f_seg, list):
             f_seg_arr = jnp.asarray(f_seg)
         else:
             raise TypeError("f0 should be a float or array_like")

@@ -44,7 +44,8 @@ class Likelihood:
         tc_container (list): Container for `Eryn` parameter transforms.
     """
     def __init__(self, 
-                    psd_fn, 
+                    psd_fn,
+                    data_container=None, 
                     t=None,
                     d=None,
                     freqs=None,
@@ -62,7 +63,7 @@ class Likelihood:
                     noisekeys=[],
                     backgroundkeys=[],
                     foregroundkeys=[],
-                    inf=1e14,
+                    inf=1e300,
                     use_gpu=True,
                     return_gpu=False,
                     nsubset=1,
@@ -124,21 +125,24 @@ class Likelihood:
             A
             dditional keyword arguments.
         """
-        self.data = DataContainer(
-            t=t,
-            d=d,
-            freqs=freqs,
-            dtilde=dtilde,
-            weights=weights,
-            nchannels=nchannels,
-            fmin=fmin,
-            fmax=fmax,
-            average=average,
-            f_segments=f_segments,
-            fullmatrix=fullmatrix,
-            window=window,
-            use_gpu=use_gpu
-        )
+        if data_container is not None:
+            self.data = data_container
+        else:
+            self.data = DataContainer(
+                t=t,
+                d=d,
+                freqs=freqs,
+                dtilde=dtilde,
+                weights=weights,
+                nchannels=nchannels,
+                fmin=fmin,
+                fmax=fmax,
+                average=average,
+                f_segments=f_segments,
+                fullmatrix=fullmatrix,
+                window=window,
+                use_gpu=use_gpu
+            )
 
         #todo: pass the datacontainer as an input instead of the individual parameters.
 
@@ -372,7 +376,7 @@ class Likelihood:
         return logl
     
 
-    @partial(jax.jit, static_argnums=(0,))
+    #@partial(jax.jit, static_argnums=(0,))
     def wishart_logl(self, psd, *args, **kwargs) :
         """
         Compute the log likelihood for the Wishart likelihood. 

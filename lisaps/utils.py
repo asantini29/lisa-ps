@@ -89,11 +89,12 @@ class FisherMatrix(BaseNoise):
 
         return Fim
     
-    def compute_covariance_matrix(self, freqs, nu=1):
+    def compute_covariance_matrix(self, freqs, nu=1.0):
         '''
         Compute the covariance matrix for a given set of frequencies.
         '''
-        if nu == 1:
+        nu = jnp.atleast_1d(nu)
+        if jnp.all(nu == 1.0):
             warnings.warn('Calculating the Fisher matrix for nu=1. This only applies to the Whittle likelihood function, if using the Whishart likelihood, provide the effective number of DoFs per frequency bin.')
         FIM = self.compute_fisher_matrix(freqs, nu)
         cov = jnp.linalg.inv(FIM)
