@@ -136,10 +136,16 @@ class Likelihood:
             self.nsource_wf_gen = 0
 
             if data_container.averaged: # without signal we can use an averaged likelihood
-                self.compute_logl = self.wishart_logl
+                if self.fullmatrix:
+                    self.compute_logl = self.wishart_logl_full
+                else:
+                    self.compute_logl = self.wishart_logl_diagonal
+                
             else:
-                self.compute_logl = self.whittle_logl
-
+                if self.fullmatrix:
+                    self.compute_logl = self.whittle_logl_full
+                else:
+                    self.compute_logl = self.whittle_logl_diagonal
         else:                
                 
             if not isinstance(source_wf_gen, list):
@@ -319,7 +325,7 @@ class Likelihood:
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def whittle_logl(self, psd, ntilde, ntildentilde):
+    def whittle_logl_full(self, psd, ntilde, ntildentilde):
         """
         Compute the log likelihood for the Whittle likelihood.
 
@@ -332,24 +338,38 @@ class Likelihood:
             array: The log likelihood.
         """
 
-        if self.fullmatrix:
-            to_solve, logdet = get_matrix_determinant(psd, hermitian=self.hermitian, return_mat=False)
+        to_solve, logdet = get_matrix_determinant(psd, hermitian=self.hermitian, return_mat=False)
 
-            ntilde_rep = jnp.repeat(ntilde, psd.shape[0], axis=0)
-            ntildeconj_invcov = self.solve(to_solve, jnp.conj(ntilde_rep)[:, :, :])
-        
-            ntildentilde = jnp.einsum('ijk,ijk -> ij', ntildeconj_invcov, ntilde)
-            logl = - jnp.sum(ntildentilde + logdet, axis=-1)
+        ntilde_rep = jnp.repeat(ntilde, psd.shape[0], axis=0)
+        ntildeconj_invcov = self.solve(to_solve, jnp.conj(ntilde_rep)[:, :, :])
+    
+        ntildentilde = jnp.einsum('ijk,ijk -> ij', ntildeconj_invcov, ntilde)
+        logl = - jnp.sum(ntildentilde + logdet, axis=-1)
 
-        else:
-            cov = psd
-            logl = - jnp.sum( self.data.weights * (ntildentilde / cov + jnp.log(cov)),  axis = (1, 2))
+        return logl
+
+    @partial(jax.jit, static_argnums=(0,))
+    def whittle_logl_diagonal(self, psd, ntilde, ntildentilde):
+        """
+        Compute the log likelihood for the Whittle likelihood.
+
+        Args:
+            psd (array): The power spectral density.
+            ntilde (array): The residual data in the frequency domain.
+            ntildentilde (array): The residual data in the frequency domain times its complex conjugate traspose.
+
+        Returns:
+            array: The log likelihood.
+        """
+
+        cov = psd
+        logl = - jnp.sum( self.data.weights * (ntildentilde / cov + jnp.log(cov)),  axis = (1, 2))
 
         return logl
     
 
-    #@partial(jax.jit, static_argnums=(0,))
-    def wishart_logl(self, psd, *args, **kwargs) :
+    @partial(jax.jit, static_argnums=(0,))
+    def wishart_logl_full(self, psd, *args, **kwargs) :
         """
         Compute the log likelihood for the Wishart likelihood. 
         Since the Wishart likelihood is based on averaging over data segments, it cannot be used when including deterministic signals.
@@ -361,14 +381,26 @@ class Likelihood:
             array: The log likelihood.
         """
 
-        if self.fullmatrix:
-            cov, logdet = get_matrix_determinant(psd, hermitian=self.hermitian, return_mat=True)
-            invcov = jnp.linalg.inv(cov)
-            del cov
+        cov, logdet = get_matrix_determinant(psd, hermitian=self.hermitian, return_mat=True)
+        invcov = jnp.linalg.inv(cov)
+        del cov
 
-            return -  jnp.sum(jnp.einsum('...ii', jnp.einsum('...ij, ...jk->...ik', invcov, self.data.Y)) + self.data.nu * logdet, axis=-1) 
+        return -  jnp.sum(jnp.einsum('...ii', jnp.einsum('...ij, ...jk->...ik', invcov, self.data.Y)) + self.data.nu * logdet, axis=-1) 
 
-        else:
-            cov = psd
-            return - jnp.sum(self.data.Y / cov + self.data.nu[None, :, None] * jnp.log(cov), axis=(1,2)) #+ self.norm
+
+    @partial(jax.jit, static_argnums=(0,))
+    def wishart_logl_diagonal(self, psd, *args, **kwargs):
+        """
+        Compute the log likelihood for the Wishart likelihood. 
+        Since the Wishart likelihood is based on averaging over data segments, it cannot be used when including deterministic signals.
+
+        Args:
+            psd (array): The power spectral density.
+        
+        Returns:
+            array: The log likelihood.
+        """
+        
+        cov = psd
+        return - jnp.sum(self.data.Y / cov + self.data.nu[None, :, None] * jnp.log(cov), axis=(1,2)) #+ self.norm
 
