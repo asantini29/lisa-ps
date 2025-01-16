@@ -1043,6 +1043,8 @@ class DataContainer(GPUobject):
                 self.Y = self.nu[None, :, None] * self.periodgram[None, :, :]
 
             self.dtildedtilde = None
+            
+            self.averaged = True
 
         else:
             self.frequencymask = (freqs > self.fmin) & (freqs < self.fmax)
@@ -1053,6 +1055,8 @@ class DataContainer(GPUobject):
             self.dtilde = self.dtilde[self.frequencymask, :]
             self.periodgram = P[self.frequencymask]
             self.nu = 1.0
+
+            self.averaged = False
 
         if weights is not None:
             self.weights = jnp.asarray(weights[self.frequencymask])[None, :, :]

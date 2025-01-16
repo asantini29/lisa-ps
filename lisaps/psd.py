@@ -305,6 +305,10 @@ class Psd(BaseNoise, StochasticContribution):
         else:
             PSDS = self.set_PSDS(freqs, out=True)   
 
+        # if self.xp.any(self.xp.isnan(PSDS)):
+        #     warnings.warn('Some noise PSDs are NaN')
+        #     breakpoint()
+
         if not isinstance(args, list):
             args = [args]
         
@@ -319,7 +323,10 @@ class Psd(BaseNoise, StochasticContribution):
         
         logperturbation = self.logperturbation_numba(freqs=freqs, knots=knots, weights=weights)
         perturbation = 10**logperturbation
-        perturbation[ftol_mask] = self.xp.nan
+        perturbation[ftol_mask] = self.xp.nan #todo removing for now. this must be investigated further
+        # if self.xp.any(self.xp.isnan(perturbation)):
+        #     warnings.warn('Some noise perturbations are NaN')
+        #     breakpoint()
 
         perturbation = jnp.asarray(perturbation)        
 
@@ -595,11 +602,13 @@ class Psd(BaseNoise, StochasticContribution):
         
         if self.nbackgrounds > 0:
             
-            try:
-                response = self.isotropicresponse[jnp.newaxis, :, :]
-            except:
-                self.set_isotropicresponse(freqs)
-                response = self.isotropicresponse[jnp.newaxis, :, :]
+            # try:
+            #     response = self.isotropicresponse[jnp.newaxis, :, :]
+            # except:
+            #     self.set_isotropicresponse(freqs)
+            #     response = self.isotropicresponse[jnp.newaxis, :, :]
+
+            response = self.get_isotropicresponse(freqs)[jnp.newaxis, :, :]
 
             sgwbs_all = jnp.zeros_like(PSDS)
 
@@ -619,12 +628,20 @@ class Psd(BaseNoise, StochasticContribution):
                        
                         perturbation = 10**logperturbation
                         perturbation[ftol_mask] = self.xp.nan
+                        # if self.xp.any(self.xp.isnan(perturbation)):
+                        #     warnings.warn('Some sgwb perturbations are NaN')
+                        #     breakpoint()
+
                         perturbation = jnp.asarray(perturbation)        
 
                         h2omega = h2omega * perturbation
 
                     Shs = self.convert_to_psd(freqs, h2omega)
                     Shs = self.convert_units(freqs, Shs)
+
+                    # if self.xp.any(self.xp.isnan(Shs)):
+                    #     warnings.warn('Some sgwb PSDs are NaN')
+                    #     breakpoint()
                 
                 sgwbs_all = sgwbs_all + Shs   
 
@@ -669,5 +686,8 @@ class Psd(BaseNoise, StochasticContribution):
                 Shs = self.convert_units(freqs, Shs)
 
                 PSDS = PSDS + Shs * response 
+        
+        # if np.any(~np.isfinite(PSDS)):
+        #     breakpoint()
 
         return PSDS

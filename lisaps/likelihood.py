@@ -46,20 +46,9 @@ class Likelihood:
     def __init__(self, 
                     psd_fn,
                     data_container=None, 
-                    t=None,
-                    d=None,
-                    freqs=None,
-                    dtilde=None,
-                    fmin=1e-4,
-                    fmax=2.9e-2,
-                    weights=None,
                     source_wf_gen=None,
-                    nchannels=3,
-                    average=False,
                     hermitian=True,
                     fullmatrix=False,
-                    f_segments=1e-5,
-                    window=('kaiser', 30),
                     noisekeys=[],
                     backgroundkeys=[],
                     foregroundkeys=[],
@@ -125,34 +114,15 @@ class Likelihood:
             A
             dditional keyword arguments.
         """
-        if data_container is not None:
-            self.data = data_container
-        else:
-            self.data = DataContainer(
-                t=t,
-                d=d,
-                freqs=freqs,
-                dtilde=dtilde,
-                weights=weights,
-                nchannels=nchannels,
-                fmin=fmin,
-                fmax=fmax,
-                average=average,
-                f_segments=f_segments,
-                fullmatrix=fullmatrix,
-                window=window,
-                use_gpu=use_gpu
-            )
-
-        #todo: pass the datacontainer as an input instead of the individual parameters.
+        self.data = data_container
 
         self.use_gpu = use_gpu
         self.xp = xp if self.use_gpu else np
         self.return_gpu = return_gpu
 
-        self.nchannels = nchannels
-        self.fmin = fmin
-        self.fmax = fmax
+        self.nchannels = data_container.nchannels
+        self.fmin = data_container.fmin
+        self.fmax = data_container.fmax
 
         self.fullmatrix = fullmatrix
         self.hermitian = hermitian 
@@ -165,7 +135,7 @@ class Likelihood:
             
             self.nsource_wf_gen = 0
 
-            if average: # without signal we can use an averaged likelihood
+            if data_container.averaged: # without signal we can use an averaged likelihood
                 self.compute_logl = self.wishart_logl
             else:
                 self.compute_logl = self.whittle_logl
@@ -292,6 +262,8 @@ class Likelihood:
             logl_all.append(logl)
 
         logl_out = np.concatenate(logl_all)
+        
+        # check if all the values are finite
         logl_out[~np.isfinite(logl_out)] = -self.inf
 
         if self.return_gpu:
