@@ -18,7 +18,7 @@ class StochasticContribution(GPUobject):
     StochasticContribution class for handling stochastic background and foreground contributions in TDI channels.
     Attributes:
         available_channels (list): List of available TDI channels.
-        equal_arms (bool): Flag indicating whether the arms are of equal length.
+        custom_arms (bool): Flag indicating whether to use custom armlength.
         armlength (float): Length of the arms.
         channels (list): List of channels to include.
         nbackgrounds (int): Number of background types.
@@ -43,8 +43,8 @@ class StochasticContribution(GPUobject):
                  foregrounds=[], 
                  foreground_kwargs={}, 
                  use_gpu=False, 
-                 TDIsetup='AET', 
-                 equal_arms=False,
+                 custom_armlength=None,
+                 TDIsetup='AET',
                  isotropicresponse=None, 
                  GBresponse=None, 
                  channels=None, 
@@ -61,6 +61,7 @@ class StochasticContribution(GPUobject):
             foregrounds (list): List of foreground types to include.
             foreground_kwargs (dict): Keyword arguments for foreground functions.
             use_gpu (bool): Flag indicating whether to use GPU acceleration.
+            custom_armlength (None or float): Custom armlength to use.
             TDIsetup (str): TDI setup to use.
             isotropicresponse (None or callable): Isotropic response function.
             GBresponse (None or callable): GB response function.
@@ -85,9 +86,15 @@ class StochasticContribution(GPUobject):
         self.available_channels = ['AA', 'EE', 'TT', 'XX', 'YY', 'ZZ', 'XY', 'XZ', 'YZ']
 
         self.TDIsetup = TDIsetup
-        self.equal_arms = equal_arms
 
-        self.armlength = ARMLENGTH_EQUAL if equal_arms else ARMLENGTH_AVERAGE
+        if custom_armlength is not None:
+            self.armlength = custom_armlength
+            self.custom_armlength = True
+        else:
+            self.armlength = ARMLENGTH_AVERAGE
+            self.custom_armlength = False
+        
+        #breakpoint()
 
         if channels is not None:
             if not isinstance(channels, list):
@@ -284,7 +291,7 @@ class StochasticContribution(GPUobject):
         if response is None: #use default files
             TFdir = '/data/asantini/packages/lisa-ps/utils/'
 
-            if self.equal_arms: #assume constant equal armlengths
+            if self.custom_armlength: #assume constant equal armlengths
                 files = ['TDItransferfunction_AET_equal.csv', 'TDItransferfunction_AET_equal_nosagnac.csv', 'TDItransferfunction_XYZreal_equal.csv', 'TDItransferfunction_XYZimag_equal.csv']
             
             else: #assume average armlengths
@@ -501,7 +508,7 @@ class PowerLaw(EnergyDensity):
     
     @partial(jax.jit, static_argnums=(0,))
     def h2omega(self, freqs, A, n):
-        return A * (freqs / self.fknee)**n
+        return (A * (freqs / self.fknee)**n)[:, :, jnp.newaxis]
         
     
     @property
@@ -553,7 +560,7 @@ class PhaseTransitions(EnergyDensity):
     def h2omega_sw(self, freqs, Asw, fsw):
         fp = freqs / fsw
         h2omega = Asw * self.Csw(fp)
-        return h2omega
+        return h2omega[:, :, jnp.newaxis]
     
     @partial(jax.jit, static_argnums=(0,))
     def Csw(self, fp):
@@ -586,7 +593,7 @@ class PhaseTransitions(EnergyDensity):
         '''
         h2omega = Aturb * self.Sturb_norm(freqs=freqs, fsw=fsw, Tstar=Tstar)
 
-        return h2omega
+        return h2omega[:, :, jnp.newaxis]
 
     def __call__(self, freqs, args):
         #self.check_ndim(args)
@@ -657,7 +664,7 @@ class HyperbolicTangent(EnergyDensity):
             * jnp.exp(-(freqs*s1)**alpha)
             * (freqs ** exp)
             * (1.0 + jnp.tanh(-(freqs - fknee) * s2))
-        )
+        )[:, :, jnp.newaxis]
 
        
         #same units of the cosmological backgrounds
@@ -709,7 +716,7 @@ class GaussianBumpHyperbolicTangent(HyperbolicTangent):
         '''
         TODO change the function structure if we want to use RJ here
         '''
-        return A * jnp.exp(-((freq - f_center)**2) / (2 * width**2))
+        return (A * jnp.exp(-((freq - f_center)**2) / (2 * width**2)))[:, :, jnp.newaxis]
     
     @partial(jax.jit, static_argnums=(0,))
     def gaussian_bump_sum(self, freq, A, f_center, width):

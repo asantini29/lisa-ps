@@ -165,7 +165,7 @@ class BaseNoise(GPUobject):
         units (str): Units for the noise ('hertz', 'meters', or 'strain').
     """
 
-    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, equal_arms=False, custom_armlength=None, T=1.0, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', scirdv1=False, interpkwargs=dict(kind='akima', axis=1)):
+    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, custom_armlength=None, T=1.0, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', scirdv1=False, filtered=True, interpkwargs=dict(kind='akima', axis=1)):
         """
         Initialize the base class for LISA simulation.
         Parameters:
@@ -196,6 +196,8 @@ class BaseNoise(GPUobject):
             Units for the noise, either 'strain' or other (default is 'strain').
         scirdv1 : bool, optional
             If True, use SCIR DV1 noise parameters (default is False).
+        filtered : bool, optional
+            If True, use the filtered noise model (default is True).
         interpkwargs : dict, optional
             Keyword arguments for interpolation (default is dict(kind='akima', axis=1)).
         Raises:
@@ -212,11 +214,13 @@ class BaseNoise(GPUobject):
             self.armlength = custom_armlength
             print('Using custom armlength: {}'.format(custom_armlength))
         else:
-            self.armlength = ARMLENGTH_EQUAL if equal_arms else ARMLENGTH_AVERAGE
+            self.armlength = ARMLENGTH_AVERAGE
             print('Using default armlength: {}'.format(self.armlength))
         self.fs = fs if fs is not None else FS
         self.FMIN = 1 / (T * YRSID_SI)
+
         self.scirdv1 = scirdv1
+        self.filtered = filtered
 
         self.setup_noise()
 
@@ -361,36 +365,8 @@ class BaseNoise(GPUobject):
 
         else:
             raise ValueError('units must be `hertz`, `meters`, or `strain`')
-
-
+ 
     def testmass_single(self, asdTM, freqs):
-        """
-        Model for single TM noise PSD including filters used in the data generation
-        
-        Args:
-            asdTM (float, ndarray): The ASD (Amplitude Spectral Density) for the TM (Test Mass) noise.
-            freqs (float): frequencies [Hz]
-        """
-        asd = jnp.atleast_2d(asdTM) # m / s^2 / sqrt(Hz)
-        psd_acc = asd**2 * jnp.atleast_2d(1 + (self.fkneeTM / freqs)**2)  # m^2 / s^4 / Hz
-
-        if self.units == 'hertz':
-            psd_hertz = jnp.atleast_2d(CENTRAL_FREQ / (2 * jnp.pi * C * freqs))**2 * psd_acc
-            return jnp.sqrt(psd_hertz)
-
-        elif self.units == 'meters':
-            psd_meters = jnp.atleast_2d(2 * jnp.pi * freqs)**(-4) * psd_acc
-            return jnp.sqrt(psd_meters)
-        
-        elif self.units == 'strain':
-            psd_strain = jnp.atleast_2d(1 / (2 * jnp.pi * C * freqs))**2 * psd_acc
-            return jnp.sqrt(psd_strain)
-
-
-        else:
-            raise ValueError('units must be `hertz`, `meters` or `strain`')
-        
-    def testmass_scirdv1(self, asdTM, freqs):
         """
         Model for single TM noise PSD in the scirdv1 configuration.
         
@@ -586,7 +562,7 @@ class BaseNoise(GPUobject):
         array-like: The test mass response for channel A.
         """
 
-        return self.tdi_tf_testmass_A(freqs) * self.filtered_testmass_single(asdTM, freqs)
+        return self.tdi_tf_testmass_A(freqs) * self.get_testmass_noise(asdTM, freqs)
 
     def testmass_T(self, asdTM, freqs):
         """
@@ -601,7 +577,7 @@ class BaseNoise(GPUobject):
         array-like: The test mass response for channel T.
         """
         
-        return self.tdi_tf_testmass_T(freqs) * self.filtered_testmass_single(asdTM, freqs)
+        return self.tdi_tf_testmass_T(freqs) * self.get_testmass_noise(asdTM, freqs)
 
     def oms_A(self, asdOMS, freqs):
         """
@@ -615,7 +591,7 @@ class BaseNoise(GPUobject):
         Returns:
         array-like: The optical metrology system response for channel A.
         """
-        return self.tdi_tf_oms_A(freqs) * self.filtered_oms_in_isi_carrier(asdOMS, freqs)
+        return self.tdi_tf_oms_A(freqs) * self.get_oms_noise(asdOMS, freqs)
 
     def oms_T(self, asdOMS, freqs):
         """
@@ -629,7 +605,7 @@ class BaseNoise(GPUobject):
         Returns:
         array-like: The optical metrology system response for channel T.
         """
-        return self.tdi_tf_oms_T(freqs) * self.filtered_oms_in_isi_carrier(asdOMS, freqs)
+        return self.tdi_tf_oms_T(freqs) * self.get_oms_noise(asdOMS, freqs)
 
     @partial(jax.jit, static_argnums=(0,))
     def get_SA_base(self, asdTM, asdOMS, freqs):
@@ -667,8 +643,8 @@ class BaseNoise(GPUobject):
 
         x = 2.0 * np.pi * self.armlength * freqs
 
-        Spm = self.testmass_scirdv1(asdTM, freqs) ** 2
-        Sop = self.oms_in_isi_carrier(asdOMS, freqs) ** 2
+        Spm = self.get_testmass_noise(asdTM, freqs) ** 2
+        Sop = self.get_oms_noise(asdOMS, freqs) ** 2
 
         Sa = (
             8.0
@@ -689,8 +665,8 @@ class BaseNoise(GPUobject):
         '''
         x = 2.0 * np.pi * self.armlength * freqs
 
-        Spm = self.testmass_scirdv1(asdTM, freqs) ** 2
-        Sop = self.oms_in_isi_carrier(asdOMS, freqs) ** 2
+        Spm = self.get_testmass_noise(asdTM, freqs) ** 2
+        Sop = self.get_oms_noise(asdOMS, freqs) ** 2
 
         return (
             16.0 * Sop * (1.0 - jnp.cos(x)) * jnp.sin(x) ** 2
@@ -714,7 +690,7 @@ class BaseNoise(GPUobject):
             The calculated test mass XX response.
         """
         
-        return self.tdi_tf_testmass_XX(freqs) * self.filtered_testmass_single(asdTM, freqs)
+        return self.tdi_tf_testmass_XX(freqs) * self.get_testmass_noise(asdTM, freqs)
 
     def testmass_XY(self,asdTM, freqs):
         """
@@ -729,7 +705,7 @@ class BaseNoise(GPUobject):
         array-like: The test mass XY response.
         """
 
-        return self.tdi_tf_testmass_XY2(freqs) * self.filtered_testmass_single(asdTM, freqs)**2
+        return self.tdi_tf_testmass_XY2(freqs) * self.get_testmass_noise(asdTM, freqs)**2
 
     def oms_XX(self, asdOMS, freqs):
         """
@@ -745,13 +721,13 @@ class BaseNoise(GPUobject):
         array-like: The result of the oms_XX calculation.
         """
 
-        return self.tdi_tf_oms_XX(freqs) * self.filtered_oms_in_isi_carrier(asdOMS, freqs)
+        return self.tdi_tf_oms_XX(freqs) * self.get_oms_noise(asdOMS, freqs)
 
     def oms_XY(self, asdOMS, freqs):
         """
         Calculate the OMS XY component.
         This method computes the OMS XY component by multiplying the result of 
-        `tdi_tf_oms_XY2` with the square of the result from `filtered_oms_in_isi_carrier`.
+        `tdi_tf_oms_XY2` with the square of the result from `get_oms_noise`.
         Args:
             asdOMS (array-like): The amplitude spectral density of the OMS.
             freqs (array-like): The frequencies at which to evaluate the OMS XY component.
@@ -759,7 +735,7 @@ class BaseNoise(GPUobject):
             array-like: The computed OMS XY component.
         """
 
-        return self.tdi_tf_oms_XY2(freqs) * self.filtered_oms_in_isi_carrier(asdOMS, freqs)**2
+        return self.tdi_tf_oms_XY2(freqs) * self.get_oms_noise(asdOMS, freqs)**2
 
     @partial(jax.jit, static_argnums=(0,))
     def get_SXX(self, asdTM, asdOMS, freqs):
@@ -796,6 +772,13 @@ class BaseNoise(GPUobject):
         '''
         Sets up the noise model for the given configuration.
         '''
+        if self.filtered:
+            self.get_testmass_noise = self.filtered_testmass_single
+            self.get_oms_noise = self.filtered_oms_in_isi_carrier
+        else:
+            self.get_testmass_noise = self.testmass_single
+            self.get_oms_noise = self.oms_in_isi_carrier
+
         if self.scirdv1:
             self.get_SA = self.get_SA_scirdv1
             self.get_ST = self.get_ST_scirdv1
@@ -1024,7 +1007,7 @@ class DataContainer(GPUobject):
 
             freqs, P, sizes = self.average_periodogram(P, freqs, f_segments)
 
-            self.frequencymask = (freqs > self.fmin) & (freqs < self.fmax) # here to remove the zeros of the transfer functions. #todo: work on a way not to waste all these data
+            self.frequencymask = (freqs >= self.fmin) & (freqs <= self.fmax) # here to remove the zeros of the transfer functions. #todo: work on a way not to waste all these data
             self.freqs = jnp.real(jnp.array(freqs[self.frequencymask]))
 
             if hasattr(self, 'df'):
@@ -1047,7 +1030,7 @@ class DataContainer(GPUobject):
             self.averaged = True
 
         else:
-            self.frequencymask = (freqs > self.fmin) & (freqs < self.fmax)
+            self.frequencymask = (freqs >= self.fmin) & (freqs <= self.fmax)
             self.freqs = freqs[self.frequencymask]
             if hasattr(self, 'df'): 
                 self.df = self.df[self.frequencymask]
@@ -1080,18 +1063,26 @@ class DataContainer(GPUobject):
         if self.domain == 'time':
             if d is None:
                 d = self.d
+            
+            nfft = self.window.shape[0]
 
-            norm = 2.0 * self.dt / jnp.sum(self.window**2)
-            Xtilde = jnp.asarray([np.fft.rfft(d[:, i] * self.window) for i in range(self.nchannels)]).T * jnp.sqrt(norm) #ALREADY NORMALIZED, refer to arXiv:2302.12573
+            norm = 1 * self.dt / np.sum(self.window**2) # "two sided", still have to multiply by 2
+            Xtilde = np.asarray([np.fft.rfft(d[:, i] * self.window) for i in range(self.nchannels)]).T * np.sqrt(norm) #ALREADY NORMALIZED, refer to arXiv:2302.12573
 
+            if nfft % 2:
+                Xtilde[1:, :] *= np.sqrt(2.0)
+            else:
+                 Xtilde[1:-1, :] *= np.sqrt(2.0) # take care of hte Nyquist frequency as done in scipy
+        
         elif self.domain == 'frequency':
             if d is None:
                 d = self.dtilde
 
             norm = 2.0 * self.df
 
-            Xtilde = jnp.asarray(d * np.sqrt(norm)) #ALREADY NORMALIZED, refer to arXiv:2302.12573
-        return Xtilde
+            Xtilde = np.asarray(d * np.sqrt(norm)) #ALREADY NORMALIZED, refer to arXiv:2302.12573
+            
+        return jnp.asarray(Xtilde)
 
     
     def get_XtildeXtilde(self, dtilde=None):
@@ -1171,7 +1162,9 @@ class DataContainer(GPUobject):
             bandwidth = int(f_seg / df)
             # Segment frequencies
             f_seg_arr = freqs[0::bandwidth]
-            f_seg_arr = jnp.concatenate((f_seg_arr, jnp.atleast_1d(freqs[-1])))
+            # Add the last frequency if it is not included
+            if freqs[-1] not in f_seg_arr:
+                f_seg_arr = jnp.concatenate((f_seg_arr, jnp.atleast_1d(freqs[-1])))
         elif hasattr(f_seg, '__array__') or isinstance(f_seg, list):
             f_seg_arr = jnp.asarray(f_seg)
         else:
@@ -1272,4 +1265,3 @@ class DataContainer(GPUobject):
 
         plt.tight_layout()
         return fig, axs
-

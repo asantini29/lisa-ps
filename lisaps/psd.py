@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 
-from .baseclasses import BaseNoise, TDIresponse
+from .baseclasses import BaseNoise
 from .stochasticbackgrounds import StochasticContribution
 from typing import Any, Callable
 import numpy as np
+
+import time
 
 import jax
 import jax.numpy as jnp
@@ -57,7 +59,6 @@ class Psd(BaseNoise, StochasticContribution):
                  fmax=2.9e-2, 
                  T=1.0,
                  fs=None,
-                 equal_arms=False,
                  custom_armlength=None,
                  Ncov=None, 
                  channels=None, 
@@ -76,6 +77,7 @@ class Psd(BaseNoise, StochasticContribution):
                  correct_sagnac=True,
                  ftol=0.1,
                  scirdv1=False,
+                 filtered=True,
                  pixelPSD=False,
                  **kwargs
                  ):
@@ -133,6 +135,8 @@ class Psd(BaseNoise, StochasticContribution):
             Tolerance for fitting (default is 0.1).
         scirdv1 : bool, optional
             If True, use SCIRDV1 (default is False).
+        filtered : bool, optional
+            If True, use filtered testmass and oms noises (default is True).
         pixelPSD : bool, optional
             If True, use pixel PSD (default is False).
         **kwargs : dict
@@ -144,7 +148,7 @@ class Psd(BaseNoise, StochasticContribution):
         else:
             perturbation_type = kwargs.pop('perturbation_type')
 
-        BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, equal_arms=equal_arms, custom_armlength=custom_armlength, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs, scirdv1=scirdv1, **kwargs)
+        BaseNoise.__init__(self, asdTM=asdTM, asdOMS=asdOMS, custom_armlength=custom_armlength, T=T, fs=fs, Ncov=Ncov, channels=channels, use_gpu=use_gpu, units=units, interpkwargs=interpkwargs, scirdv1=scirdv1,filtered=filtered, **kwargs)
 
         if noiseless:
             self.asdTM = 0.
@@ -160,8 +164,8 @@ class Psd(BaseNoise, StochasticContribution):
                                        background_kwargs=background_kwargs, 
                                        foregrounds=foregrounds, 
                                        foreground_kwargs=foreground_kwargs, 
+                                       custom_armlength=custom_armlength,
                                        TDIsetup=self.TDIsetup,
-                                       equal_arms=equal_arms,
                                        isotropicresponse=isotropicresponse, 
                                        GBresponse=GBresponse, 
                                        channels=self.channels, 
@@ -217,12 +221,31 @@ class Psd(BaseNoise, StochasticContribution):
 
         Parameters:
         - perturbation (dict): Dictionary specifying the perturbation types.
+
+        #todo document the extra keywords
         """
 
         assert isinstance(perturbation, dict), '`perturbation` must be a dictionary'
         self.noiseperturbation = perturbation['noise']
         self.backgroundperturbation = perturbation['background']
         self.foregroundperturbation = perturbation['foreground']
+
+        if 'Nknotsmax' in perturbation.keys():
+            self.Nknotsmax = perturbation['Nknotsmax']
+
+        if 'fill_edges' in perturbation.keys() and perturbation['fill_edges'] is not None:
+            if isinstance(perturbation['fill_edges'], (list, tuple, np.ndarray)):
+                self.leftedge = perturbation['fill_edges'][0]
+                self.rightedge = perturbation['fill_edges'][1]
+            else:
+                self.leftedge = perturbation['fill_edges']
+                self.rightedge = perturbation['fill_edges']
+
+                self.prepare_interp_input = self.prepare_interp_input_fixed_edges
+        
+        else:
+            self.prepare_interp_input = self.prepare_interp_input_with_edges
+
         self.set_noisefn()
 
     def set_noisefn(self):
@@ -299,11 +322,12 @@ class Psd(BaseNoise, StochasticContribution):
         
         if self.fitASDs:
             PSDS = self.constmod(freqs, args[:1])    
+            ngroups = groups[0].shape[0]
             args = args[1:]  
             groups = groups[1:]
-
         else:
             PSDS = self.set_PSDS(freqs, out=True)   
+            ngroups = 0
 
         # if self.xp.any(self.xp.isnan(PSDS)):
         #     warnings.warn('Some noise PSDs are NaN')
@@ -317,13 +341,13 @@ class Psd(BaseNoise, StochasticContribution):
             
         nin = min([arg.shape[0] for arg in args])
 
-        knots, weights = self.prepare_interp_input_numba(args=args, groups=groups)
+        knots, weights = self.prepare_interp_input(args=args, groups=groups, ngroups=ngroups)
 
         ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1), axis=0)
         
         logperturbation = self.logperturbation_numba(freqs=freqs, knots=knots, weights=weights)
         perturbation = 10**logperturbation
-        perturbation[ftol_mask] = self.xp.nan #todo removing for now. this must be investigated further
+        perturbation[ftol_mask] = self.xp.nan 
         # if self.xp.any(self.xp.isnan(perturbation)):
         #     warnings.warn('Some noise perturbations are NaN')
         #     breakpoint()
@@ -332,7 +356,6 @@ class Psd(BaseNoise, StochasticContribution):
 
         PSDS = PSDS * perturbation
          
-
         return PSDS
     
     def logperturbation(self, freqs, knots, weights):
@@ -372,7 +395,7 @@ class Psd(BaseNoise, StochasticContribution):
 
         return logperturbation.transpose(1, 2, 0)
     
-    def prepare_interp_input_numba(self, args, groups):
+    def prepare_interp_input_with_edges(self, args, groups, ngroups=0):
         """
         Prepares the input data for interpolation using Numba.
         Parameters:
@@ -385,6 +408,8 @@ class Psd(BaseNoise, StochasticContribution):
             A list of arrays where the first element contains the group indices for 
             the edges and weights, and the subsequent elements contain the group 
             indices for the knots.
+        ngroups : int, optional
+            Number of groups (default is 0).
         Returns:
         --------
         sortedpositions : ndarray
@@ -400,7 +425,8 @@ class Psd(BaseNoise, StochasticContribution):
             leftedge_full = edges_weights[:, 0::2]
             rightedge_full = edges_weights[:, 1::2]
 
-            group_unique, group_index, group_inverse, group_count = self.xp.unique(groups_knots, return_index=True, return_counts=True, return_inverse=True)
+            #? group_unique, group_index, group_inverse, group_count = self.xp.unique(groups_knots, return_index=True, return_counts=True, return_inverse=True)
+            group_unique, group_index, group_inverse = self.xp.unique(groups_knots, return_index=True, return_counts=False, return_inverse=True)
 
             diff_temp = self.xp.ones_like(group_inverse)
             diff_temp[1:] = (~self.xp.diff(group_inverse).astype(bool)).astype(int)
@@ -409,10 +435,13 @@ class Psd(BaseNoise, StochasticContribution):
             inds_group_subtract = inds_per_group[group_index][group_inverse]
             inds_per_group = inds_per_group - inds_group_subtract
 
-            ngroups = (group_unique.max().item() - group_unique.min().item() ) + 1
-            maxgroups = group_count.max().item()
+            ngroups = leftedge_full.shape[0] #? (group_unique.max().item() - group_unique.min().item() ) + 1
+            maxgroups = self.Nknotsmax #? group_count.max().item() if group_count.shape[0] > 0 else 0
 
             knots_full_nans = self.xp.full((ngroups, maxgroups, knots_full.shape[-1]), self.xp.nan)
+            if leftedge_full.shape[0] != ngroups:
+                breakpoint()
+
             leftedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmin), leftedge_full), axis=1)[:, None, :]
             rightedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmax), rightedge_full), axis=1)[:, None, :]
 
@@ -423,15 +452,15 @@ class Psd(BaseNoise, StochasticContribution):
             positions = knots_full_nans[:,:,:1]
             weights = knots_full_nans[:,:,1:]
 
-            ii = self.xp.argsort(positions, axis = 1)
-            sortedpositions = self.xp.take_along_axis(positions, ii, axis=1)
+            order = self.xp.argsort(positions, axis = 1)
+            sortedpositions = self.xp.take_along_axis(positions, order, axis=1)
 
             if (args[1].shape[-1] == self.Ncov + 1):
                 sortedpositions = self.xp.repeat(sortedpositions, self.Ncov, axis = -1).transpose(2,0,1)
             else:
                 sortedpositions = sortedpositions.transpose(2,0,1)
 
-            sortedweights = self.xp.take_along_axis(weights, ii, axis=1).transpose(2,0,1)
+            sortedweights = self.xp.take_along_axis(weights, order, axis=1).transpose(2,0,1)
 
         else:
             edges_weights = self.xp.asarray(args[0])
@@ -441,17 +470,12 @@ class Psd(BaseNoise, StochasticContribution):
             args_knots = [self.xp.asarray(arg) for arg in args[1:]] #still a list
             groups_knots = groups[1:] #still a list
 
-            groups_unique = np.unique(groups[0])
-            ngroups = (groups_unique.max().item() - groups_unique.min().item()) + 1
+            # groups_unique = np.unique(groups[0])
+            # ngroups = (groups_unique.max().item() - groups_unique.min().item()) + 1
 
-            try:
-                maxgroups = self.Nknotsmax  
-            except:
-                maxgroups = 0
-                for g in groups_knots:
-                    _, counts = np.unique(g, return_counts=True)
-                    maxgroups = counts.max().item() if counts.max().item() > maxgroups else maxgroups
-                self.Nknotsmax = maxgroups
+            ngroups = groups[0].shape[0] # RJ is not used in this branch, since it is the one handling the edges. there will be only one leaf per group
+
+            maxgroups = self.Nknotsmax  
             
             knots_full_nans = self.xp.full((ngroups, maxgroups, 2*self.Ncov), self.xp.nan)
             leftedge_full = self.xp.concatenate((self.xp.full((ngroups, self.Ncov), self.logfmin), leftedge_full), axis=1)[:, None, :]
@@ -459,7 +483,8 @@ class Psd(BaseNoise, StochasticContribution):
 
             for j, (arg, group) in enumerate(zip(args_knots, groups_knots)):
                 group = self.xp.asarray(group)
-                group_unique, group_index, group_inverse, group_count = self.xp.unique(group, return_index=True, return_counts=True, return_inverse=True)
+                #? group_unique, group_index, group_inverse, group_count = self.xp.unique(group, return_index=True, return_counts=True, return_inverse=True)
+                group_unique, group_index, group_inverse = self.xp.unique(group, return_index=True, return_counts=False, return_inverse=True)
 
                 diff_temp = self.xp.ones_like(group_inverse)
                 diff_temp[1:] = (~self.xp.diff(group_inverse).astype(bool)).astype(int)
@@ -476,9 +501,128 @@ class Psd(BaseNoise, StochasticContribution):
             positions = knots_full_nans[:,:,:self.Ncov]
             weights = knots_full_nans[:,:,self.Ncov:]
 
-            ii = self.xp.argsort(positions, axis = 1)
-            sortedpositions = self.xp.take_along_axis(positions, ii, axis=1).transpose(2,0,1)
-            sortedweights = self.xp.take_along_axis(weights, ii, axis=1).transpose(2,0,1)
+            order = self.xp.argsort(positions, axis = 1)
+            sortedpositions = self.xp.take_along_axis(positions, order, axis=1).transpose(2,0,1)
+            sortedweights = self.xp.take_along_axis(weights, order, axis=1).transpose(2,0,1)
+
+        return sortedpositions, sortedweights
+    
+    def prepare_interp_input_fixed_edges(self, args, groups, ngroups=0):
+        """
+        Prepares the input data for interpolation using Numba.
+        Parameters:
+        -----------
+        args : list
+            A list of arrays where the first element contains the edges and weights, 
+            and the subsequent elements contain the knots. The shape of the arrays 
+            determines the processing path.
+        groups : list
+            A list of arrays where the first element contains the group indices for 
+            the edges and weights, and the subsequent elements contain the group 
+            indices for the knots.
+        ngroups : int, optional
+            Number of groups (default is 0).
+        Returns:
+        --------
+        sortedpositions : ndarray
+            An array of sorted positions for interpolation.
+        sortedweights : ndarray
+            An array of sorted weights corresponding to the sorted positions.
+        """
+
+        if len(args) == 1: # this means all the weights are together or there is only one spline
+            knots_full = self.xp.asarray(args[0]) #always work along the `1` axis for frequency operations # TODO may have to change this, maybe (Ncov, Nin, Nfreq) is better
+            groups_knots = groups[0]           
+    
+            #leftedge_full = edges_weights[:, 0::2]
+            #rightedge_full = edges_weights[:, 1::2]
+
+            #? group_unique, group_index, group_inverse, group_count = self.xp.unique(groups_knots, return_index=True, return_counts=True, return_inverse=True)
+            group_unique, group_index, group_inverse = self.xp.unique(groups_knots, return_index=True, return_counts=False, return_inverse=True)
+
+            diff_temp = self.xp.ones_like(group_inverse)
+            diff_temp[1:] = (~self.xp.diff(group_inverse).astype(bool)).astype(int)
+
+            inds_per_group = (self.xp.cumsum(diff_temp) - 1)
+            inds_group_subtract = inds_per_group[group_index][group_inverse]
+            inds_per_group = inds_per_group - inds_group_subtract
+
+            if group_unique.shape[0] > 1:
+                ngroups = max(ngroups, (group_unique.max().item() - group_unique.min().item() ) + 1)
+
+            maxgroups = self.Nknotsmax #? group_count.max().item() if group_count.shape[0] > 0 else 0
+
+            knots_full_nans = self.xp.full((ngroups, maxgroups, knots_full.shape[-1]), self.xp.nan)
+
+            leftedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmin), self.xp.full((ngroups,1), self.leftedge)), axis=1)[:, None, :]
+            rightedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmax), self.xp.full((ngroups,1), self.rightedge)), axis=1)[:, None, :]
+
+            knots_full_nans[(groups_knots, inds_per_group)] = knots_full
+        
+            knots_full_nans = self.xp.concatenate((leftedge_full, knots_full_nans, rightedge_full), axis = 1)
+
+            positions = knots_full_nans[:,:,:1]
+            weights = knots_full_nans[:,:,1:]
+
+            order = self.xp.argsort(positions, axis = 1)
+            sortedpositions = self.xp.take_along_axis(positions, order, axis=1)
+
+            # if (args[1].shape[-1] == self.Ncov + 1):
+            #     sortedpositions = self.xp.repeat(sortedpositions, self.Ncov, axis = -1).transpose(2,0,1)
+            # else:
+            #     sortedpositions = sortedpositions.transpose(2,0,1)
+            
+            sortedpositions = sortedpositions.transpose(2,0,1)
+            sortedweights = self.xp.take_along_axis(weights, order, axis=1).transpose(2,0,1)
+
+        else:
+            args_knots = [self.xp.asarray(arg) for arg in args] #still a list
+            groups_knots = groups#[1:] #still a list
+
+            groups_unique, groups_index, groups_inverse = [], [], []
+
+            for i in range(len(groups_knots)):
+                tmp_unique, tmp_index, tmp_inverse = self.xp.unique(groups_knots[i], return_index=True, return_counts=False, return_inverse=True)
+
+                groups_unique.append(tmp_unique)
+                groups_index.append(tmp_index)
+                groups_inverse.append(tmp_inverse)
+
+                if tmp_unique.shape[0] > 0:
+                    ngroups = max(ngroups, (tmp_unique.max().item() - tmp_unique.min().item()) + 1)            
+
+            maxgroups = self.Nknotsmax  
+            
+            knots_full_nans = self.xp.full((ngroups, maxgroups, 2*self.Ncov), self.xp.nan)
+            leftedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmin), self.xp.full((ngroups,1), self.leftedge)), axis=1)[:, None, :]
+            rightedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmax), self.xp.full((ngroups,1), self.rightedge)), axis=1)[:, None, :]
+
+            for j, (arg, group) in enumerate(zip(args_knots, groups_knots)):
+                group = self.xp.asarray(group)
+                #? group_unique, group_index, group_inverse, group_count = self.xp.unique(group, return_index=True, return_counts=True, return_inverse=True)
+                group_unique, group_index, group_inverse = groups_unique[j], groups_index[j], groups_inverse[j]
+
+                diff_temp = self.xp.ones_like(group_inverse)
+                diff_temp[1:] = (~self.xp.diff(group_inverse).astype(bool)).astype(int)
+
+                inds_per_group = (self.xp.cumsum(diff_temp) - 1)
+                inds_group_subtract = inds_per_group[group_index][group_inverse]
+                inds_per_group = inds_per_group - inds_group_subtract
+
+                knots_full_nans[:,:, j][(group, inds_per_group)] = arg[:, 0]
+                knots_full_nans[:,:, self.Ncov + j][(group, inds_per_group)] = arg[:, 1]
+
+            leftedge_full = self.xp.repeat(leftedge_full, self.Ncov, axis = 2)
+            rightedge_full = self.xp.repeat(rightedge_full, self.Ncov, axis = 2)
+
+            knots_full_nans = self.xp.concatenate((leftedge_full, knots_full_nans, rightedge_full), axis = 1)
+
+            positions = knots_full_nans[:,:,:self.Ncov]
+            weights = knots_full_nans[:,:,self.Ncov:]
+
+            order = self.xp.argsort(positions, axis = 1)
+            sortedpositions = self.xp.take_along_axis(positions, order, axis=1).transpose(2,0,1)
+            sortedweights = self.xp.take_along_axis(weights, order, axis=1).transpose(2,0,1)
 
         return sortedpositions, sortedweights
     
@@ -599,7 +743,7 @@ class Psd(BaseNoise, StochasticContribution):
 
         '''
         PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
-        
+
         if self.nbackgrounds > 0:
             
             # try:
@@ -608,7 +752,7 @@ class Psd(BaseNoise, StochasticContribution):
             #     self.set_isotropicresponse(freqs)
             #     response = self.isotropicresponse[jnp.newaxis, :, :]
 
-            response = self.get_isotropicresponse(freqs)[jnp.newaxis, :, :]
+            # response = self.get_isotropicresponse(freqs)[jnp.newaxis, :, :]
 
             sgwbs_all = jnp.zeros_like(PSDS)
 
@@ -616,21 +760,18 @@ class Psd(BaseNoise, StochasticContribution):
                 
                 if len(backargs[i]) > 0:
                     back = self.backgrounds[i]
-                    h2omega = self.backgrounds_fn[i](freqs, backargs[i], **kwargs[back])[:,:,None]         
+                    h2omega = self.backgrounds_fn[i](freqs, backargs[i], **kwargs[back])#[:,:,None]         
 
                     if self.backgroundperturbation:
 
-                        bknots, bweights = self.prepare_interp_input_numba(backargs[self.nbackgrounds+2*i:self.nbackgrounds+2*(i+1)], backgroups[self.nbackgrounds+2*i:self.nbackgrounds+2*(i+1)])
+                        bknots, bweights = self.prepare_interp_input(backargs[self.nbackgrounds+2*i:self.nbackgrounds+2*(i+1)], backgroups[self.nbackgrounds+2*i:self.nbackgrounds+2*(i+1)], ngroups=backargs[i].shape[0])
 
                         ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(bknots)) < self.ftol, axis=-1), axis=0)
                         
                         logperturbation = self.logperturbation_numba(freqs=freqs, knots=bknots, weights=bweights)
-                       
+
                         perturbation = 10**logperturbation
                         perturbation[ftol_mask] = self.xp.nan
-                        # if self.xp.any(self.xp.isnan(perturbation)):
-                        #     warnings.warn('Some sgwb perturbations are NaN')
-                        #     breakpoint()
 
                         perturbation = jnp.asarray(perturbation)        
 
@@ -645,27 +786,21 @@ class Psd(BaseNoise, StochasticContribution):
                 
                 sgwbs_all = sgwbs_all + Shs   
 
-            PSDS = PSDS + sgwbs_all * response 
-        
+            PSDS = PSDS + sgwbs_all * self.isotropicresponse 
+
         if self.nforegrounds > 0:
-            
-            if hasattr(self, 'GBresponse'):
-                response = self.GBresponse[jnp.newaxis, :, :]
-            else:
-                self.set_GBresponse(freqs, analytical=True)
-                response = self.GBresponse[jnp.newaxis, :, :]
             
             for j in range(self.nforegrounds): #compatibility with the idea of having multiple foregrounds
                 fore = self.foregrounds[j]
                 
-                Shs = self.foregrounds_fn[j](freqs, foreargs[j], **kwargs[fore])[:,:,None] 
+                Shs = self.foregrounds_fn[j](freqs, foreargs[j], **kwargs[fore])#[:,:,None] 
                 nin = Shs.shape[0]
 
                 if self.foregroundperturbation:
 
                     if self.kwargs['perturbation_type'] == 'spline':
 
-                        fknots, fweights = self.prepare_interp_input_numba(foreargs[self.nforegrounds+2*j:self.nforegrounds+2*(j+1)], foregroups[self.nforegrounds+2*j:self.nforegrounds+2*(j+1)])
+                        fknots, fweights = self.prepare_interp_input(foreargs[self.nforegrounds+2*j:self.nforegrounds+2*(j+1)], foregroups[self.nforegrounds+2*j:self.nforegrounds+2*(j+1)], ngroups=backargs[i].shape[0])
                         ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(fknots)) < self.ftol, axis=-1), axis=0)
                         logperturbation = self.logperturbation_numba(freqs=freqs, knots=fknots, weights=fweights)
                         
@@ -685,7 +820,7 @@ class Psd(BaseNoise, StochasticContribution):
 
                 Shs = self.convert_units(freqs, Shs)
 
-                PSDS = PSDS + Shs * response 
+                PSDS = PSDS + Shs * self.GBresponse 
         
         # if np.any(~np.isfinite(PSDS)):
         #     breakpoint()

@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-from pysco import utils
 from typing import Any, Callable
 import warnings
+import time
 
 import numpy as np
-from scipy import signal
 try:
     import cupy as xp
 except:
@@ -16,7 +15,6 @@ from functools import partial
 
 jax.config.update("jax_enable_x64", True)
 
-from .baseclasses import DataContainer
 from .utils import get_matrix_determinant
 
 class Likelihood:
@@ -160,6 +158,7 @@ class Likelihood:
         self.foregroundkeys = foregroundkeys
 
         self.setup_indeces()
+        self.setup_responses()
 
         self.inf = inf
         self.rj = rj
@@ -185,7 +184,6 @@ class Likelihood:
         Returns:
             numpy.ndarray: The evaluated log-likelihood values.
         """
-        
         if not isinstance(args, list):
             args = [args]
 
@@ -211,7 +209,6 @@ class Likelihood:
             inds_all = np.concatenate([inds_all, np.array([ngroups])])
 
         for i in range(len(inds_all) - 1):
-
             wf_args, noise_args, background_args, foreground_args = [], [], [], []
             wf_groups, noise_groups, background_groups, foreground_groups = [], [], [], []
 
@@ -243,7 +240,7 @@ class Likelihood:
                                    background_groups,
                                    foreground_groups,
                                    **kwargs)
-
+            
             if self.nsource_wf_gen > 0:
                 h = self.xp.zeros(shape=(self.freqs[0]))
 
@@ -254,12 +251,10 @@ class Likelihood:
                 n = self.d - h
                 ntilde = self.data.get_Xtilde(n)
                 ntildentilde = self.data.get_XtildeXtilde(ntilde)
-                logl_args = [ntilde]
                 
             else:
                 ntilde = self.data.dtilde[self.xp.newaxis, :, :]
                 ntildentilde = self.data.dtildedtilde
-                logl_args = []
 
             if self.use_gpu:
                 mempool = xp.get_default_memory_pool()
@@ -290,6 +285,14 @@ class Likelihood:
         self.idx_background = self.idx_noise + len(self.noisekeys)
         self.idx_foreground = self.idx_background + len(self.backgroundkeys)
         self.indeces = [self.idx_wf, self.idx_noise, self.idx_background, self.idx_foreground]
+
+    def setup_responses(self):
+        """
+        Set up the responses for the different components.
+        """
+        self.psd_fn.isotropicresponse = self.psd_fn.get_isotropicresponse(self.data.freqs)[jnp.newaxis, :, :]
+        self.psd_fn.set_GBresponse(self.data.freqs, analytical=True)
+        self.psd_fn.GBresponse = self.psd_fn.GBresponse[jnp.newaxis, :, :]
         
     def unpack_args(self, args):
         """
@@ -307,7 +310,7 @@ class Likelihood:
         
         for i in range(len(components)):
             if self.tc_container[i] is not None:
-                components[i] += [self.tc_container[i][j].transform_base_parameters(arg) for j,arg in enumerate(args[indeces[i] : indeces[i+1]])]
+                components[i] += [self.tc_container[i][j].both_transforms(arg) for j,arg in enumerate(args[indeces[i] : indeces[i+1]])]
             else:
                 components[i] += args[indeces[i] : indeces[i+1]]
 
