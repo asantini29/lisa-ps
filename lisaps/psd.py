@@ -78,7 +78,6 @@ class Psd(BaseNoise, StochasticContribution):
                  ftol=0.1,
                  scirdv1=False,
                  filtered=True,
-                 pixelPSD=False,
                  **kwargs
                  ):
         """
@@ -137,8 +136,6 @@ class Psd(BaseNoise, StochasticContribution):
             If True, use SCIRDV1 (default is False).
         filtered : bool, optional
             If True, use filtered testmass and oms noises (default is True).
-        pixelPSD : bool, optional
-            If True, use pixel PSD (default is False).
         **kwargs : dict
             Additional keyword arguments.
         """
@@ -172,7 +169,6 @@ class Psd(BaseNoise, StochasticContribution):
                                        units=units,
                                        use_gpu=use_gpu,
                                        correct_sagnac=correct_sagnac,
-                                       pixelPSD=pixelPSD,
                                        )
 
         self.PSDS_design = None

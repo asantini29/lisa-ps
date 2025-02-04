@@ -50,7 +50,6 @@ class StochasticContribution(GPUobject):
                  channels=None, 
                  units='strain', 
                  correct_sagnac=True, 
-                 pixelPSD=False,
                  **kwargs):
         """
         Initialize the StochasticContribution object.
@@ -68,7 +67,6 @@ class StochasticContribution(GPUobject):
             channels (None or list): List of channels to include.
             units (str): Units of the output.
             correct_sagnac (bool): Flag indicating whether to correct for Sagnac effect.
-            pixelPSD (bool): Flag indicating whether to convert to pixel PSD. #todo: figure out the 2\pi factor
             **kwargs: Additional keyword arguments.
 
         Raises:
@@ -140,11 +138,6 @@ class StochasticContribution(GPUobject):
         self.set_backgrounds_fn(background_kwargs)
         self.set_foregrounds_fn(foreground_kwargs)
 
-        if pixelPSD:
-            self.convert_to_psd = self.convert_to_pixel_psd
-        else:
-            self.convert_to_psd = self.convert_to_total_psd
-
     @property
     def conversion(self):
         return self._conversion
@@ -159,9 +152,10 @@ class StochasticContribution(GPUobject):
             self._conversion = 1 
 
     @partial(jax.jit, static_argnums=(0,))
-    def convert_to_total_psd(self, freqs, h2omega):
+    def convert_to_psd(self, freqs, h2omega):
         """
-        Return the psd given the background functional function. It returns the total psd per unit of sky.
+        Compute the psd given the background energy density functional form. 
+        It returns the psd per polarization integrated over the sky.
 
         Args:
             freqs (array): Array of frequencies.    
@@ -171,22 +165,7 @@ class StochasticContribution(GPUobject):
             array: Array of Sh values. 
         """
         Sh = h2omega * (3 * H0h**2 / (4 * jnp.pi**2 * freqs[None, :, None]**3)) #strain units
-        return Sh
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def convert_to_pixel_psd(self, freqs, h2omega):
-        """
-        Return the pixel psd given the background functional function. It returns the whole-sky psd per polarisation. 
-
-        Args:
-            freqs (array): Array of frequencies.    
-            h2omega (array): Array of h2omega values.
-
-        Returns:
-            array: Array of Sh values. 
-        """
-        Sh = self.convert_to_total_psd(freqs, h2omega)
-        return Sh * (2 * jnp.pi)
+        return Sh / 2 # for the two polarizations
     
     @partial(jax.jit, static_argnums=(0,))
     def convert_units(self, freqs, Sh):
