@@ -800,7 +800,7 @@ class Psd(BaseNoise, StochasticContribution):
 
                     if self.kwargs['perturbation_type'] == 'spline':
 
-                        fknots, fweights = self.prepare_interp_input(foreargs[self.nforegrounds+2*j:self.nforegrounds+2*(j+1)], foregroups[self.nforegrounds+2*j:self.nforegrounds+2*(j+1)], ngroups=backargs[i].shape[0])
+                        fknots, fweights = self.prepare_interp_input(foreargs[self.nforegrounds+2*j:self.nforegrounds+2*(j+1)], foregroups[self.nforegrounds+2*j:self.nforegrounds+2*(j+1)], ngroups=foreargs[j].shape[0])
                         ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(fknots)) < self.ftol, axis=-1), axis=0)
                         logperturbation = self.logperturbation_numba(freqs=freqs, knots=fknots, weights=fweights)
                         

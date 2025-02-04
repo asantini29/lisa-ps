@@ -17,6 +17,7 @@ from scipy.interpolate import Akima1DInterpolator as scipy_Akima1DInterpolator
 from scipy import signal
 
 from .constants import *
+from .smoothing import adaptive_log_bin, average_periodogram_static
 from cudakima import AkimaInterpolant1D
 
 
@@ -929,7 +930,7 @@ class DataContainer(GPUobject):
                 fmin=1e-4,
                 fmax=2.9e-2,
                 average=False,
-                f_segments=1e-5,
+                average_kwargs=dict(f_segments=1e-5),
                 fullmatrix=False,
                 window=('kaiser', 30),
                 use_gpu=False,
@@ -945,8 +946,8 @@ class DataContainer(GPUobject):
         nchannels (int, optional): Number of channels. Default is 3.
         fmin (float, optional): Minimum frequency. Default is 1e-4.
         fmax (float, optional): Maximum frequency. Default is 2.9e-2.
-        average (bool, optional): Whether to average the periodogram. Default is False.
-        f_segments (float, optional): Frequency segments for averaging. Default is 1e-5.
+        average (bool, optional): Whether to average the periodogram. Default is False. Set to 'adaptive' for adaptive binning.
+        average_kwargs (dict, optional): Keyword arguments for the averaging function. Default is dict(f_segments=1e-5), which is the input of `average_peridogram_static`.
         fullmatrix (bool, optional): Whether to use the full matrix. Default is False.
         window (tuple, optional): Window function and its parameter. Default is ('kaiser', 30).
         use_gpu (bool, optional): Whether to use GPU for computations. Default is False.
@@ -999,44 +1000,43 @@ class DataContainer(GPUobject):
             self.fmin = freqs.min()
             self.fmax = freqs.max()
 
-
+        self.frequencymask = (freqs >= self.fmin) & (freqs <= self.fmax) # here to remove the zeros of the transfer functions. #todo: work on a way not to waste all these data
+        self.all_freqs = freqs
         self.dtilde = self.get_Xtilde(d_tmp)   
         P = self.periodogram_matrix(self.dtilde)
 
         if average: # without signal we can use an averaged likelihood
 
-            freqs, P, sizes = self.average_periodogram(P, freqs, f_segments)
+            self.average_periodogram = adaptive_log_bin if average == 'adaptive' else average_periodogram_static
 
-            self.frequencymask = (freqs >= self.fmin) & (freqs <= self.fmax) # here to remove the zeros of the transfer functions. #todo: work on a way not to waste all these data
-            self.freqs = jnp.real(jnp.array(freqs[self.frequencymask]))
+            freqs, P, sizes = self.average_periodogram(freqs, P, fmin, fmax, **average_kwargs)
 
-            if hasattr(self, 'df'):
-                self.df = np.concatenate(([freqs[1] - freqs[0]], np.diff(freqs)))[self.frequencymask, None]
+            self.freqs = jnp.array(freqs.real)
 
-            self.periodgram = P[self.frequencymask]
-            self.sizes = sizes[self.frequencymask]
+            if hasattr(self, 'df'): #replace df with the new one
+                self.df = np.concatenate(([freqs[1] - freqs[0]], np.diff(freqs)))[:, None]
+
+            self.periodogram = P
+            self.sizes = sizes
 
             self.nu = self.sizes / self.Nbw
 
-            p = min(self.nchannels, 3)
-
-            if self.fullmatrix:
-                self.Y = self.nu[None, :, None, None] * self.periodgram[None, :, :, :]
+            if self.fullmatrix: #! todo: use vmap in the likelihood to make this more elegant
+                self.Y = self.nu[None, :, None, None] * self.periodogram[None, :, :, :]
             else:
-                self.Y = self.nu[None, :, None] * self.periodgram[None, :, :]
+                self.Y = self.nu[None, :, None] * self.periodogram[None, :, :]
 
             self.dtildedtilde = None
             
             self.averaged = True
 
         else:
-            self.frequencymask = (freqs >= self.fmin) & (freqs <= self.fmax)
             self.freqs = freqs[self.frequencymask]
             if hasattr(self, 'df'): 
                 self.df = self.df[self.frequencymask]
             self.dtildedtilde =self.get_XtildeXtilde()[:, self.frequencymask, :]
             self.dtilde = self.dtilde[self.frequencymask, :]
-            self.periodgram = P[self.frequencymask]
+            self.periodogram = P[self.frequencymask]
             self.nu = 1.0
 
             self.averaged = False
@@ -1132,59 +1132,6 @@ class DataContainer(GPUobject):
             P = jnp.einsum('...ii->...i', P)
         
         return P
-    
-    def average_periodogram(self, P, freqs, f_seg):
-        """
-        Average the periodogram matrix over segments. Snippet credits: Nikolaos Karnesis.
-        
-        Parameters
-        ----------
-        P : array
-            The periodogram matrix to average.
-        freqs : array
-            The frequencies of the periodogram matrix.
-        f_seg : float
-            The segment frequency.
-            
-        Returns
-        -------
-        freqs_h : array
-            The frequencies where the averaged periodogram is computed.
-        P_avg : array
-            The averaged periodogram matrix.
-        segment_sizes : array
-            The sizes of the frequency segments.
-        """
-
-        df = (freqs[1] - freqs[0])
-        if isinstance(f_seg, float):
-            # Smoothing bandwidth
-            bandwidth = int(f_seg / df)
-            # Segment frequencies
-            f_seg_arr = freqs[0::bandwidth]
-            # Add the last frequency if it is not included
-            if freqs[-1] not in f_seg_arr:
-                f_seg_arr = jnp.concatenate((f_seg_arr, jnp.atleast_1d(freqs[-1])))
-        elif hasattr(f_seg, '__array__') or isinstance(f_seg, list):
-            f_seg_arr = jnp.asarray(f_seg)
-        else:
-            raise TypeError("f0 should be a float or array_like")
-        
-        # Number of segments
-        n_seg = len(f_seg_arr)
-        # Indices of the segment bounds
-        i_seg = np.round(f_seg_arr / df).astype(int)
-        # Sizes of all intervals
-        segment_sizes = i_seg[1:] - i_seg[:-1]
-        # Middle frequencies
-        freqs_h = (f_seg_arr[:-1] + f_seg_arr[1:]) / 2.0
-
-        # Compute the averages over each segment
-        P_avg = jnp.array(
-            [jnp.sum(P[i_seg[j]:i_seg[j+1]], axis=0) / segment_sizes[j]
-            for j in range(n_seg-1)], dtype=P.dtype)
-        
-        return freqs_h, P_avg, segment_sizes
        
 
     def get_window(self, window_func, n):
@@ -1257,7 +1204,7 @@ class DataContainer(GPUobject):
             axs = axs if nchannels > 1 else [axs]
         
         for i, ax in enumerate(axs):
-            ax.loglog(self.freqs, self.periodgram.real[:, channels[i]], **kwargs)
+            ax.loglog(self.freqs, self.periodogram.real[:, channels[i]], **kwargs)
             ax.set_xlabel('Frequency [Hz]')
             #ax.set_title(f'Channel {self.channels[i]}')
 

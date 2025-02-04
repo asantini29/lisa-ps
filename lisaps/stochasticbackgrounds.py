@@ -121,8 +121,7 @@ class StochasticContribution(GPUobject):
             
         self.correct_sagnac = correct_sagnac
 
-        if len(self.backgrounds) > 0:
-            self.isotropicresponse_interp = self.set_responseinterp(isotropicresponse)
+        self.isotropicresponse_interp = self.set_responseinterp(isotropicresponse)
 
         # foregrounds setup
         if not isinstance(foregrounds, list):
@@ -162,7 +161,7 @@ class StochasticContribution(GPUobject):
     @partial(jax.jit, static_argnums=(0,))
     def convert_to_total_psd(self, freqs, h2omega):
         """
-        Return the psd given the background functional function.
+        Return the psd given the background functional function. It returns the total psd per unit of sky.
 
         Args:
             freqs (array): Array of frequencies.    
@@ -177,7 +176,7 @@ class StochasticContribution(GPUobject):
     @partial(jax.jit, static_argnums=(0,))
     def convert_to_pixel_psd(self, freqs, h2omega):
         """
-        Return the pixel psd given the background functional function.
+        Return the pixel psd given the background functional function. It returns the whole-sky psd per polarisation. 
 
         Args:
             freqs (array): Array of frequencies.    

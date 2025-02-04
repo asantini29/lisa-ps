@@ -15,4 +15,4 @@ from .lisaps import __author__
 from .lisaps import __author_email__
 
 
-from . import baseclasses, constants, likelihood, psd, stochasticbackgrounds, utils
+from . import baseclasses, constants, likelihood, psd, stochasticbackgrounds, utils, smoothing

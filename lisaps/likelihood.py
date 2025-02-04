@@ -16,8 +16,9 @@ from functools import partial
 jax.config.update("jax_enable_x64", True)
 
 from .utils import get_matrix_determinant
+from .baseclasses import GPUobject
 
-class Likelihood:
+class Likelihood(GPUobject):
     """
     A class to represent the likelihood for a given dataset and model. This interface is designed specifically to work with the `Eryn` sampler (https://mikekatz04.github.io/Eryn/html/index.html).
     Attributes:
@@ -115,12 +116,8 @@ class Likelihood:
         self.data = data_container
 
         self.use_gpu = use_gpu
-        self.xp = xp if self.use_gpu else np
+        GPUobject.__init__(self, use_gpu=use_gpu)
         self.return_gpu = return_gpu
-
-        self.nchannels = data_container.nchannels
-        self.fmin = data_container.fmin
-        self.fmax = data_container.fmax
 
         self.fullmatrix = fullmatrix
         self.hermitian = hermitian 
@@ -129,27 +126,21 @@ class Likelihood:
         else:
             self.solve = jnp.linalg.solve
 
-        if source_wf_gen is None: # fit only for the psd (noise, stochastic components)
-            
+        self.get_data_information(data_container)
+
+        if source_wf_gen is None: # fit only for the psd (noise, stochastic components)    
             self.nsource_wf_gen = 0
 
-            if data_container.averaged: # without signal we can use an averaged likelihood
-                if self.fullmatrix:
-                    self.compute_logl = self.wishart_logl_full
-                else:
-                    self.compute_logl = self.wishart_logl_diagonal
-                
-            else:
-                if self.fullmatrix:
-                    self.compute_logl = self.whittle_logl_full
-                else:
-                    self.compute_logl = self.whittle_logl_diagonal
-        else:                
-                
+        else:  # with deterministic signals we have to use the whittle likelihood
             if not isinstance(source_wf_gen, list):
                 source_wf_gen = [source_wf_gen]
 
             self.nsource_wf_gen = len(source_wf_gen)
+
+            if self.fullmatrix: 
+                self.compute_logl = self.whittle_logl_full
+            else:
+                self.compute_logl = self.whittle_logl_diagonal
 
         self.psd_fn = psd_fn
 
@@ -195,7 +186,7 @@ class Likelihood:
 
         unique_groups = np.unique(np.concatenate([groups_i for groups_i in groups]))
         ngroups = unique_groups.max() + 1 if unique_groups.shape[0] > 0 else 0
-
+        
         wf_args_all, noise_args_all, background_args_all, foreground_args_all = self.unpack_args(args)
         wf_groups_all, noise_groups_all, background_groups_all, foreground_groups_all = self.unpack_groups(groups)
 
@@ -274,6 +265,31 @@ class Likelihood:
                 return logl_out.get()
             except:
                 return logl_out
+            
+    def get_data_information(self, data_container):
+        """
+        Get the data information from the data container.
+
+        Args:
+            data_container (DataContainer): The data container.
+        """
+        self.nchannels = data_container.nchannels
+        self.fmin = data_container.fmin
+        self.fmax = data_container.fmax
+
+        if data_container.averaged: # without signal we can use an averaged likelihood
+            if self.fullmatrix:
+                self.compute_logl = self.wishart_logl_full
+            else:
+                self.compute_logl = self.wishart_logl_diagonal
+            
+        else:
+            if self.fullmatrix:
+                self.compute_logl = self.whittle_logl_full
+            else:
+                self.compute_logl = self.whittle_logl_diagonal
+
+
         
     def setup_indeces(self):
         """

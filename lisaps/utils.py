@@ -259,7 +259,7 @@ class DataGenerator(GPUobject):
 
 
 class NoiseGenerator(DataGenerator):
-    def __init__(self, scirdv=False, noise_kwargs={}, spline_kwargs={}, domain='frequency', use_gpu=False):
+    def __init__(self, noise_kwargs={}, spline_kwargs={}, domain='frequency', use_gpu=False):
         '''
         Initialize the NoiseGenerator class.
 
@@ -269,7 +269,7 @@ class NoiseGenerator(DataGenerator):
         - use_gpu (bool, optional): Flag indicating whether to use GPU acceleration. Defaults to False.
         '''
       
-        psd_fn = BaseNoise(scirdv1=scirdv, **noise_kwargs).set_PSDS
+        psd_fn = BaseNoise(**noise_kwargs).set_PSDS
 
         super().__init__(psd_fn, spline_kwargs=spline_kwargs, domain=domain, use_gpu=use_gpu)
 
@@ -413,5 +413,3 @@ def logdet_from_triangle(x):
     det = 2 * jnp.sum(jnp.log(diag))
 
     return det
-
-
