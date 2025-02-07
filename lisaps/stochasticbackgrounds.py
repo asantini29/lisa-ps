@@ -165,13 +165,7 @@ class StochasticContribution(GPUobject):
             array: Array of Sh values. 
         """
         Sh = h2omega * (3 * H0h**2 / (4 * jnp.pi**2 * freqs[None, :, None]**3)) #strain units
-        return Sh / 2 # for the two polarizations
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def convert_units(self, freqs, Sh):
-        if not hasattr(self, '_conversion'):
-            self.conversion = freqs
-        return Sh * self.conversion
+        return Sh * self.conversion / 2 # for the two polarizations
     
     def set_backgrounds_fn(self, background_kwargs):
         """
@@ -355,6 +349,7 @@ class StochasticContribution(GPUobject):
             self.GBresponse = self.analytical_GBresponse(freqs)[:, idxs]
         else:
             self.GBresponse = self.get_GBresponse(freqs)[:, idxs]
+
     
     @partial(jax.jit, static_argnums=(0,))
     def analytical_GBresponse(self, freqs):
@@ -385,6 +380,19 @@ class StochasticContribution(GPUobject):
         respT =  0.0 * x**2
         
         return jnp.array([respA, respE, respT]).T
+    
+    def setup_frequency_dependences(self, freqs):
+        """
+        Set up all the frequency-dependent quantities for the TDI channels selected.
+        
+        Parameters:
+        freqs (array): Array of frequencies.
+        """
+        self.isotropicresponse = self.get_isotropicresponse(freqs)[jnp.newaxis, :, :]
+        self.set_GBresponse(freqs, analytical=True)
+        self.GBresponse = self.GBresponse[jnp.newaxis, :, :]
+
+        self.conversion = freqs
 
     def TDI_background(self, freqs, args):
         """
@@ -410,7 +418,7 @@ class StochasticContribution(GPUobject):
         h2omega = jnp.zeros(shape = (1, freqs.shape[0], 1))
 
         for i, back in enumerate(self.backgrounds_fn):
-            h2omega += back(freqs, args[i])[:, :, None]
+            h2omega += back(freqs, args[i])#[:, :, None]
 
         Sh = self.convert_to_psd(freqs, h2omega)
 

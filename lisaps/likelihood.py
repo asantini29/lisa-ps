@@ -149,7 +149,8 @@ class Likelihood(GPUobject):
         self.foregroundkeys = foregroundkeys
 
         self.setup_indeces()
-        self.setup_responses()
+        
+        self.psd_fn.setup_frequency_dependences(self.data.freqs)
 
         self.inf = inf
         self.rj = rj
@@ -301,14 +302,6 @@ class Likelihood(GPUobject):
         self.idx_background = self.idx_noise + len(self.noisekeys)
         self.idx_foreground = self.idx_background + len(self.backgroundkeys)
         self.indeces = [self.idx_wf, self.idx_noise, self.idx_background, self.idx_foreground]
-
-    def setup_responses(self):
-        """
-        Set up the responses for the different components.
-        """
-        self.psd_fn.isotropicresponse = self.psd_fn.get_isotropicresponse(self.data.freqs)[jnp.newaxis, :, :]
-        self.psd_fn.set_GBresponse(self.data.freqs, analytical=True)
-        self.psd_fn.GBresponse = self.psd_fn.GBresponse[jnp.newaxis, :, :]
         
     def unpack_args(self, args):
         """

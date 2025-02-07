@@ -741,14 +741,6 @@ class Psd(BaseNoise, StochasticContribution):
         PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
 
         if self.nbackgrounds > 0:
-            
-            # try:
-            #     response = self.isotropicresponse[jnp.newaxis, :, :]
-            # except:
-            #     self.set_isotropicresponse(freqs)
-            #     response = self.isotropicresponse[jnp.newaxis, :, :]
-
-            # response = self.get_isotropicresponse(freqs)[jnp.newaxis, :, :]
 
             sgwbs_all = jnp.zeros_like(PSDS)
 
@@ -774,7 +766,6 @@ class Psd(BaseNoise, StochasticContribution):
                         h2omega = h2omega * perturbation
 
                     Shs = self.convert_to_psd(freqs, h2omega)
-                    Shs = self.convert_units(freqs, Shs)
 
                     # if self.xp.any(self.xp.isnan(Shs)):
                     #     warnings.warn('Some sgwb PSDs are NaN')
@@ -813,8 +804,6 @@ class Psd(BaseNoise, StochasticContribution):
 
                     else:
                         raise ValueError('Invalid perturbation type')
-
-                Shs = self.convert_units(freqs, Shs)
 
                 PSDS = PSDS + Shs * self.GBresponse 
         

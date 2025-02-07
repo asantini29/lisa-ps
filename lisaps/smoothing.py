@@ -197,6 +197,7 @@ def average_periodogram_static(freqs, power, f_min=None, f_max=None, f_seg=1e-5)
 
         mask = (freqs >= f_min) & (freqs <= f_max)
         freqs = freqs[mask]
+    
         power = power[mask.reshape(mask.shape + (1,) * (len(power.shape) - 1))] #power can be a 2D or 3D array
     
 
