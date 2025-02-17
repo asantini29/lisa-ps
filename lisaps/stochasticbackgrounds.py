@@ -165,7 +165,21 @@ class StochasticContribution(GPUobject):
             array: Array of Sh values. 
         """
         Sh = h2omega * (3 * H0h**2 / (4 * jnp.pi**2 * freqs[None, :, None]**3)) #strain units
-        return Sh * self.conversion / 2 # for the two polarizations
+        return Sh / 2 # for the two polarizations
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def convert_units(self, Sh):
+        """
+        Convert the power spectral density (PSD) to the desired units.
+
+        Args:
+            Sh (array): Array of PSD values.
+        
+        Returns:
+            array: Array of PSD values in the desired units.
+        """
+        return Sh * self.conversion
+
     
     def set_backgrounds_fn(self, background_kwargs):
         """

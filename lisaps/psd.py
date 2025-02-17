@@ -766,10 +766,7 @@ class Psd(BaseNoise, StochasticContribution):
                         h2omega = h2omega * perturbation
 
                     Shs = self.convert_to_psd(freqs, h2omega)
-
-                    # if self.xp.any(self.xp.isnan(Shs)):
-                    #     warnings.warn('Some sgwb PSDs are NaN')
-                    #     breakpoint()
+                    Shs = self.convert_units(Shs)
                 
                 sgwbs_all = sgwbs_all + Shs   
 
@@ -796,6 +793,7 @@ class Psd(BaseNoise, StochasticContribution):
                         perturbation = jnp.asarray(perturbation)        
 
                         Shs = Shs * perturbation
+                        Shs = self.convert_units(Shs)
 
                     elif self.kwargs['perturbation_type'] == 'bump':
                         bump_args, bump_groups = foreargs[self.nforegrounds+j:self.nforegrounds+(j+1)][0], foregroups[self.nforegrounds+j:self.nforegrounds+(j+1)][0]
@@ -807,7 +805,5 @@ class Psd(BaseNoise, StochasticContribution):
 
                 PSDS = PSDS + Shs * self.GBresponse 
         
-        # if np.any(~np.isfinite(PSDS)):
-        #     breakpoint()
 
         return PSDS
