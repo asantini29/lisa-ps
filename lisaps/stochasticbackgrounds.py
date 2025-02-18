@@ -43,6 +43,7 @@ class StochasticContribution(GPUobject):
                  foregrounds=[], 
                  foreground_kwargs={}, 
                  use_gpu=False, 
+                 interpkwargs=None,
                  custom_armlength=None,
                  TDIsetup='AET',
                  isotropicresponse=None, 
@@ -73,7 +74,7 @@ class StochasticContribution(GPUobject):
             ValueError: If a background type is not supported.
 
         """
-        GPUobject.__init__(self, use_gpu=use_gpu, **kwargs)
+        GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs, **kwargs)
 
         self.units = units
 

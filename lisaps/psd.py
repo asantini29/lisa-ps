@@ -168,6 +168,7 @@ class Psd(BaseNoise, StochasticContribution):
                                        channels=self.channels, 
                                        units=units,
                                        use_gpu=use_gpu,
+                                       interpkwargs=interpkwargs,
                                        correct_sagnac=correct_sagnac,
                                        )
 
@@ -344,10 +345,7 @@ class Psd(BaseNoise, StochasticContribution):
         logperturbation = self.logperturbation_numba(freqs=freqs, knots=knots, weights=weights)
         perturbation = 10**logperturbation
         perturbation[ftol_mask] = self.xp.nan 
-        # if self.xp.any(self.xp.isnan(perturbation)):
-        #     warnings.warn('Some noise perturbations are NaN')
-        #     breakpoint()
-
+        
         perturbation = jnp.asarray(perturbation)        
 
         PSDS = PSDS * perturbation
