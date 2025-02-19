@@ -259,7 +259,12 @@ class Psd(BaseNoise, StochasticContribution):
         """
 
         if self.noiseperturbation:
-            self.noisefn = self.splinemod
+            if self.fitASDs:
+                self.handle_base_noise = self.get_fitted_noise
+            else:
+                self.handle_base_noise = self.get_static_noise
+            
+            self.noisefn = self.splined_noise
 
         else:
             if self.fitASDs:
@@ -302,7 +307,7 @@ class Psd(BaseNoise, StochasticContribution):
 
         return PSDS
     
-    def splinemod(self, freqs, args, groups, knots=None, **kwargs):
+    def splinemod_tmp(self, freqs, args, groups, knots=None, **kwargs):
         """
         Applies spline modification to the input power spectral densities (PSDs).
 
@@ -326,10 +331,6 @@ class Psd(BaseNoise, StochasticContribution):
             PSDS = self.set_PSDS(freqs, out=True)   
             ngroups = 0
 
-        # if self.xp.any(self.xp.isnan(PSDS)):
-        #     warnings.warn('Some noise PSDs are NaN')
-        #     breakpoint()
-
         if not isinstance(args, list):
             args = [args]
         
@@ -352,6 +353,79 @@ class Psd(BaseNoise, StochasticContribution):
          
         return PSDS
     
+    def splinemod(self, freqs, PSDS, args, groups, ngroups=0, knots=None): #! generic spline part
+        """
+        Applies spline modification to the input power spectral densities (PSDs).
+
+        Parameters:
+        - freqs (array-like): Frequencies at which the PSDs are evaluated.
+        - PSDS (array-like): Power Spectral Densities to be modified.
+        - args (array-like or list): Arguments of the PSDs evaluation. if `self.fitASDs` is True the first argument is the ASDs, while the rest are the spline coefficients. 
+        - groups (array-like or list): Group indices for the ASDs and the spline coefficients.
+        - knots (array-like, optional): Knots for the spline interpolation. If not provided, use reversible jump.
+        - ngroups (int, optional): Number of groups (default is 0).
+        - **kwargs: Additional keyword arguments.
+
+        Returns:
+        - PSDS (ndarray): Modified PSDs with shape (n_in, len(freqs), Ncov).
+        """
+
+        if not isinstance(args, list):
+            args = [args]
+            groups = [groups]
+
+        knots, weights = self.prepare_interp_input(args=args, groups=groups, ngroups=ngroups)
+
+        ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1), axis=0)
+        
+        logperturbation = self.logperturbation_numba(freqs=freqs, knots=knots, weights=weights)
+        perturbation = 10**logperturbation
+        perturbation[ftol_mask] = self.xp.nan 
+        
+        perturbation = jnp.asarray(perturbation)        
+
+        PSDS = PSDS * perturbation
+         
+        return PSDS
+    
+
+    def get_fitted_noise(self, freqs, args, groups):
+        PSDS = self.constmod(freqs, args[:1])    
+        ngroups = groups[0].shape[0]
+        args = args[1:]  
+        groups = groups[1:]
+
+        return PSDS, args, groups, ngroups
+    
+    def get_static_noise(self, freqs, args, groups):
+        PSDS = self.set_PSDS(freqs, out=True)   
+        ngroups = 0
+
+        return PSDS, args, groups, ngroups
+
+    def splined_noise(self, freqs, args, groups, ngroups=0, knots=None):
+        """
+        Fit the noise part including splines.
+
+        Parameters:
+        - freqs (array-like): Array of frequency values.
+        - args (array-like): Array of arguments where the first element contains the ASDs and the rest contain the spline coefficients.
+        - groups (array-like): Array of group indices.
+        - ngroups (int, optional): Number of groups (default is 0).
+        - knots (array-like, optional): Knot points for the interpolation (default is None).
+
+        Returns:    
+        - PSDS (ndarray): Modified PSDs with shape (n_in, len(freqs), Ncov).
+        """
+    
+
+        PSDS, args, groups, ngroups = self.handle_base_noise(freqs, args, groups)
+        
+        PSDS = self.splinemod(freqs, PSDS, args, groups, ngroups=ngroups, knots=knots)
+
+        return PSDS
+    
+
     def logperturbation(self, freqs, knots, weights):
         """
         Apply a log perturbation to the given frequencies using the specified knots and weights.
