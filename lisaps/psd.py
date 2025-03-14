@@ -40,7 +40,6 @@ class Psd(BaseNoise, StochasticContribution):
         set_noisefn(): Set the noise function based on perturbation and fitting flags.
         constmod(freqs, args, **kwargs): Compute constant model PSDs.
         splinemod(freqs, args, groups, knots=None, **kwargs): Apply spline modification to the input PSDs.
-        logperturbation(freqs, knots, weights): Compute spline perturbation.
         logperturbation_numba(freqs, knots, weights): Compute spline perturbation with numba cuda kernel.
         prepare_interp_input_numba(args, groups): Prepare input for spline interpolation with numba.
         gaussian_bump(freq, A, f_center, width): Compute Gaussian bump.
@@ -68,6 +67,8 @@ class Psd(BaseNoise, StochasticContribution):
                  perturbation={'noise':False, 'background':False, 'foreground':False}, 
                  interpkwargs=None, 
                  fitASDs=False, 
+                 fit_templates=True,
+                 injection=None,
                  backgrounds=[],
                  background_kwargs={},
                  foregrounds=[],
@@ -116,6 +117,8 @@ class Psd(BaseNoise, StochasticContribution):
             Keyword arguments for interpolation (default is None).
         fitASDs : bool, optional
             If True, fit amplitude spectral densities (default is False).
+        fit_templates : bool, optional
+            If True, fit templates for the signals (default is False).
         backgrounds : list, optional
             List of background noise sources (default is []).
         background_kwargs : dict, optional
@@ -161,6 +164,7 @@ class Psd(BaseNoise, StochasticContribution):
                                        background_kwargs=background_kwargs, 
                                        foregrounds=foregrounds, 
                                        foreground_kwargs=foreground_kwargs, 
+                                       injection=injection,
                                        custom_armlength=custom_armlength,
                                        TDIsetup=self.TDIsetup,
                                        isotropicresponse=isotropicresponse, 
@@ -181,6 +185,7 @@ class Psd(BaseNoise, StochasticContribution):
         self.logfmax = self.xp.log10(self.fmax)
 
         self.fitASDs = fitASDs
+        self.fit_templates = fit_templates
         self.update_perturbation(perturbation)
 
         if (self.fitASDs) and (self.noiseperturbation):
@@ -244,6 +249,7 @@ class Psd(BaseNoise, StochasticContribution):
             self.prepare_interp_input = self.prepare_interp_input_with_edges
 
         self.set_noisefn()
+        self.set_signalfn()
 
     def set_noisefn(self):
         """
@@ -270,7 +276,37 @@ class Psd(BaseNoise, StochasticContribution):
             if self.fitASDs:
                 self.noisefn = self.constmod
             else:
-                self.noisefn = self.set_PSDS                 
+                self.noisefn = self.set_PSDS       
+
+    def set_signalfn(self):
+        """
+        Sets the signal function for the instance based on the current configuration.
+        This method determines which signal function to use based on the attributes
+        `backgroundperturbation` and `foregroundperturbation`. The possible signal
+        functions that can be set are `splined_signal`, `const_signal`, or `set_signal`.
+        - If `backgroundperturbation` is True, the signal function is set to `splined_signal`.
+        - If `backgroundperturbation` is False and `foregroundperturbation` is True, the
+          signal function is set to `splined_signal`.
+        - If both `backgroundperturbation` and `foregroundperturbation` are False, the signal
+          function is set to `set_signal`.
+        """
+
+        if self.fit_templates:
+            self.base_background = self.base_background_fitted
+            self.base_foreground = self.base_foreground_fitted
+        else:
+            self.base_background = self.base_background_static
+            self.base_foreground = self.base_foreground_static
+
+        if self.backgroundperturbation:
+            self.apply_splines_back = self.splined_signal
+        else:
+            self.apply_splines_back = self.return_input_psd
+
+        if self.foregroundperturbation:
+            self.apply_splines_fore = self.splined_signal
+        else:
+            self.apply_splines_fore = self.return_input_psd          
 
 
     def constmod(self, freqs,  args, **kwargs):
@@ -305,52 +341,6 @@ class Psd(BaseNoise, StochasticContribution):
             asdTM, asdOMS = jnp.asarray(args[:, 0::2]).reshape(-1, 2), jnp.asarray(args[:, 1::2]).reshape(-1, 2)
             PSDS = self.get_PSDS(asdTM, asdOMS, freqs, squeeze=False).reshape(-1, len(freqs), self.Ncov)
 
-        return PSDS
-    
-    def splinemod_tmp(self, freqs, args, groups, knots=None, **kwargs):
-        """
-        Applies spline modification to the input power spectral densities (PSDs).
-
-        Parameters:
-        - freqs (array-like): Frequencies at which the PSDs are evaluated.
-        - args (array-like or list): Arguments of the PSDs evaluation. if `self.fitASDs` is True the first argument is the ASDs, while the rest are the spline coefficients. 
-        - groups (array-like or list): Group indices for the ASDs and the spline coefficients.
-        - knots (array-like, optional): Knots for the spline interpolation. If not provided, use reversible jump.
-        - **kwargs: Additional keyword arguments.
-
-        Returns:
-        - PSDS (ndarray): Modified PSDs with shape (n_in, len(freqs), Ncov).
-        """
-        
-        if self.fitASDs:
-            PSDS = self.constmod(freqs, args[:1])    
-            ngroups = groups[0].shape[0]
-            args = args[1:]  
-            groups = groups[1:]
-        else:
-            PSDS = self.set_PSDS(freqs, out=True)   
-            ngroups = 0
-
-        if not isinstance(args, list):
-            args = [args]
-        
-        if not isinstance(groups, list):
-            groups = [groups]
-            
-        nin = min([arg.shape[0] for arg in args])
-
-        knots, weights = self.prepare_interp_input(args=args, groups=groups, ngroups=ngroups)
-
-        ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1), axis=0)
-        
-        logperturbation = self.logperturbation_numba(freqs=freqs, knots=knots, weights=weights)
-        perturbation = 10**logperturbation
-        perturbation[ftol_mask] = self.xp.nan 
-        
-        perturbation = jnp.asarray(perturbation)        
-
-        PSDS = PSDS * perturbation
-         
         return PSDS
     
     def splinemod(self, freqs, PSDS, args, groups, ngroups=0, knots=None): #! generic spline part
@@ -388,7 +378,6 @@ class Psd(BaseNoise, StochasticContribution):
          
         return PSDS
     
-
     def get_fitted_noise(self, freqs, args, groups):
         PSDS = self.constmod(freqs, args[:1])    
         ngroups = groups[0].shape[0]
@@ -403,7 +392,7 @@ class Psd(BaseNoise, StochasticContribution):
 
         return PSDS, args, groups, ngroups
 
-    def splined_noise(self, freqs, args, groups, ngroups=0, knots=None):
+    def splined_noise(self, freqs, args, groups, knots=None):
         """
         Fit the noise part including splines.
 
@@ -411,13 +400,11 @@ class Psd(BaseNoise, StochasticContribution):
         - freqs (array-like): Array of frequency values.
         - args (array-like): Array of arguments where the first element contains the ASDs and the rest contain the spline coefficients.
         - groups (array-like): Array of group indices.
-        - ngroups (int, optional): Number of groups (default is 0).
         - knots (array-like, optional): Knot points for the interpolation (default is None).
 
         Returns:    
         - PSDS (ndarray): Modified PSDs with shape (n_in, len(freqs), Ncov).
         """
-    
 
         PSDS, args, groups, ngroups = self.handle_base_noise(freqs, args, groups)
         
@@ -426,27 +413,138 @@ class Psd(BaseNoise, StochasticContribution):
         return PSDS
     
 
-    def logperturbation(self, freqs, knots, weights):
+             
+    def splined_signal(self, h2omega, freqs, args, groups, base=0, index=0, knots=None):
+    
+        args_i = args[base+2*index : base+2*(index+1)]
+        groups_i = groups[base+2*index : base+2*(index+1)]
+        ngroups = args[index].shape[0]
+
+        h2omega = self.splinemod(freqs, h2omega, args_i, groups_i, ngroups=ngroups, knots=knots)
+
+        return h2omega
+            
+
+    def return_input_psd(self, x, *args, **kwargs):
+        return x
+    
+    def base_background_static(self, freqs, args, index, **kwargs):
         """
-        Apply a log perturbation to the given frequencies using the specified knots and weights.
+        Compute the base spectral shape given the "true" parameters.
+
         Parameters:
         -----------
         freqs : array-like
-            The frequencies at which to apply the log perturbation.
-        knots : array-like
-            The knot points for the interpolation.
-        weights : array-like
-            The weights for the interpolation.
+            Array of frequency values.
+        args : list
+            List of arrays where the first element contains the template arguments and the rest contain the spline coefficients (if fitting for them). 
+            Here for compatibility reasons, they are not used.
+        index : int
+            Index of the background source. This is used when fitting multiple sources.
+        kwargs : dict
+            Additional keyword arguments for the background function.
+        
         Returns:
         --------
-        logperturbation : ndarray
-            The log perturbation applied to the frequencies, reshaped to match the shape of the PSDs.
+        h2omega : ndarray
+            The computed energy density values.
+        base: int
+            helper for locating the position of the spline parameters in the list.
+        index: int
+            Index of the background source. 
         """
+
+        h2omega = self.backgrounds_fn[index].injected_signal(freqs, **kwargs)
+
+        return h2omega, 0, index
+
+    def base_background_fitted(self, freqs, args, index, **kwargs):
+        """
+        Compute the base spectral shape given the input parameters.
+
+        Parameters:
+        -----------
+        freqs : array-like
+            Array of frequency values.
+        args : list
+            List of arrays where the first element contains the template arguments and the rest contain the spline coefficients (if fitting for them).
+        index : int
+            Index of the background source. This is used when fitting multiple sources.
+        kwargs : dict
+            Additional keyword arguments for the background function.
         
-        interp = self.interp(knots, weights, **self.interpkwargs)
-        logperturbation = (interp(self.xp.log10(freqs))).reshape(-1, len(freqs), weights.shape[0]) #put it in the same shape of PSDS
+        Returns:
+        --------
+        h2omega : ndarray
+            The computed energy density values.
+        base: int
+            helper for locating the position of the spline parameters in the list.
+        index: int
+            Index of the background source. 
+        """
+
+        h2omega = self.backgrounds_fn[index](freqs, args[index], **kwargs)
+
+        return h2omega, self.nbackgrounds, index
+
+    def base_foreground_static(self, freqs, args, index, **kwargs):
+        """
+        Compute the base spectral shape given the "true" parameters.
+
+        Parameters:
+        -----------
+        freqs : array-like
+            Array of frequency values.
+        args : list
+            List of arrays where the first element contains the template arguments and the rest contain the spline coefficients (if fitting for them). 
+            Here for compatibility reasons, they are not used.
+        index : int
+            Index of the background source. This is used when fitting multiple sources.
+        kwargs : dict
+            Additional keyword arguments for the background function.
         
-        return logperturbation
+        Returns:
+        --------
+        h2omega : ndarray
+            The computed energy density values.
+        base: int
+            helper for locating the position of the spline parameters in the list.
+        index: int
+            Index of the foreground source. 
+        """
+
+        h2omega = self.foregrounds_fn[index].injected_signal(freqs, **kwargs)
+
+        return h2omega, 0, index
+
+    def base_foreground_fitted(self, freqs, args, index, **kwargs):
+        """
+        Compute the base spectral shape given the input parameters.
+
+        Parameters:
+        -----------
+        freqs : array-like
+            Array of frequency values.
+        args : list
+            List of arrays where the first element contains the template arguments and the rest contain the spline coefficients (if fitting for them).
+        index : int
+            Index of the background source. This is used when fitting multiple sources.
+        kwargs : dict
+            Additional keyword arguments for the foreground function.
+        
+        Returns:
+        --------
+        h2omega : ndarray
+            The computed energy density values.
+        base: int
+            helper for locating the position of the spline parameters in the list.
+        index: int
+            Index of the foreground source. 
+        """
+
+        h2omega = self.foregrounds_fn[index](freqs, args[index], **kwargs)
+
+        return h2omega, self.nforegrounds, index
     
     def logperturbation_numba(self, freqs, knots, weights):
         """
@@ -790,6 +888,9 @@ class Psd(BaseNoise, StochasticContribution):
         bump = self.log_gaussian_bump_sum(freq, A_full, f_center_full, width_full)
         
         return bump
+    
+    
+    
                 
 
     def __call__(self, freqs, noiseargs=[], backargs=[], foreargs=[], noisegroups=[], backgroups=[], foregroups=[], **kwargs):
@@ -814,58 +915,37 @@ class Psd(BaseNoise, StochasticContribution):
 
         if self.nbackgrounds > 0:
 
-            sgwbs_all = jnp.zeros_like(PSDS)
-
             for i in range(self.nbackgrounds):
                 
-                if len(backargs[i]) > 0:
-                    back = self.backgrounds[i]
-                    h2omega = self.backgrounds_fn[i](freqs, backargs[i], **kwargs[back])#[:,:,None]         
-
-                    if self.backgroundperturbation:
-
-                        bknots, bweights = self.prepare_interp_input(backargs[self.nbackgrounds+2*i:self.nbackgrounds+2*(i+1)], backgroups[self.nbackgrounds+2*i:self.nbackgrounds+2*(i+1)], ngroups=backargs[i].shape[0])
-
-                        ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(bknots)) < self.ftol, axis=-1), axis=0)
-                        
-                        logperturbation = self.logperturbation_numba(freqs=freqs, knots=bknots, weights=bweights)
-
-                        perturbation = 10**logperturbation
-                        perturbation[ftol_mask] = self.xp.nan
-
-                        perturbation = jnp.asarray(perturbation)        
-
-                        h2omega = h2omega * perturbation
-
-                    Shs = self.convert_to_psd(freqs, h2omega)
-                    Shs = self.convert_units(Shs)
+                back = self.backgrounds[i]
                 
-                sgwbs_all = sgwbs_all + Shs   
+                kwargs_here = kwargs.get(back, {})
 
-            PSDS = PSDS + sgwbs_all * self.isotropicresponse 
+                h2omega, base, index = self.base_background(freqs, backargs, i, **kwargs_here)
+                
+                h2omega = self.apply_splines_back(h2omega, freqs, backargs, backgroups, base=base, index=index)     
+
+                Shs = self.convert_to_psd(freqs, h2omega)
+                Shs = self.convert_units(Shs)
+                            
+                PSDS = PSDS + Shs * self.isotropicresponse 
 
         if self.nforegrounds > 0:
             
             for j in range(self.nforegrounds): #compatibility with the idea of having multiple foregrounds
                 fore = self.foregrounds[j]
                 
-                Shs = self.foregrounds_fn[j](freqs, foreargs[j], **kwargs[fore])#[:,:,None] 
+                kwargs_here = kwargs.get(fore, {})
+
+                Shs = self.foregrounds_fn[j](freqs, foreargs[j], **kwargs_here)
                 nin = Shs.shape[0]
 
+                #todo: still have to refactor this
                 if self.foregroundperturbation:
 
                     if self.kwargs['perturbation_type'] == 'spline':
 
-                        fknots, fweights = self.prepare_interp_input(foreargs[self.nforegrounds+2*j:self.nforegrounds+2*(j+1)], foregroups[self.nforegrounds+2*j:self.nforegrounds+2*(j+1)], ngroups=foreargs[j].shape[0])
-                        ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(fknots)) < self.ftol, axis=-1), axis=0)
-                        logperturbation = self.logperturbation_numba(freqs=freqs, knots=fknots, weights=fweights)
-                        
-                        perturbation = 10**logperturbation
-                        perturbation[ftol_mask] = self.xp.nan
-                        perturbation = jnp.asarray(perturbation)        
-
-                        Shs = Shs * perturbation
-                        Shs = self.convert_units(Shs)
+                        Shs = self.apply_splines_fore(Shs, freqs, foreargs, foregroups, base=self.nforegrounds, index=j)     
 
                     elif self.kwargs['perturbation_type'] == 'bump':
                         bump_args, bump_groups = foreargs[self.nforegrounds+j:self.nforegrounds+(j+1)][0], foregroups[self.nforegrounds+j:self.nforegrounds+(j+1)][0]
@@ -875,6 +955,7 @@ class Psd(BaseNoise, StochasticContribution):
                     else:
                         raise ValueError('Invalid perturbation type')
 
+                Shs = self.convert_units(Shs)
                 PSDS = PSDS + Shs * self.GBresponse 
         
 

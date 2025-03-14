@@ -259,6 +259,9 @@ class Likelihood(GPUobject):
         # check if all the values are finite
         logl_out[~np.isfinite(logl_out)] = -self.inf
 
+        if np.any(np.isnan(logl_out)):
+            breakpoint()
+
         if self.return_gpu:
             return logl_out
         else:
@@ -334,7 +337,25 @@ class Likelihood(GPUobject):
             components[i] += groups[indeces[i] : indeces[i+1]]
 
         return wf_groups, noise_groups, background_groups, foreground_groups
+    
 
+    @partial(jax.jit, static_argnums=(0,))
+    def lognormal_logl_full(self, psd, ntilde, ntildentilde):
+        """
+        Compute the log likelihood for the log-normal likelihood.
+
+        Args:
+            psd (array): The power spectral density.
+            ntilde (array): The residual data in the frequency domain.
+            ntildentilde (array): The residual data in the frequency domain times its complex conjugate traspose.
+
+        Returns:
+            array: The log likelihood.
+        """
+        cov = psd
+        logl = - jnp.sum( self.data.weights * (ntildentilde / cov + jnp.log(cov)),  axis = (1, 2))
+
+        return logl
 
     @partial(jax.jit, static_argnums=(0,))
     def whittle_logl_full(self, psd, ntilde, ntildentilde):

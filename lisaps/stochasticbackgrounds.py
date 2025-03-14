@@ -42,6 +42,7 @@ class StochasticContribution(GPUobject):
                  background_kwargs={}, 
                  foregrounds=[], 
                  foreground_kwargs={}, 
+                 injection=None,
                  use_gpu=False, 
                  interpkwargs=None,
                  custom_armlength=None,
@@ -83,6 +84,16 @@ class StochasticContribution(GPUobject):
         self._implemented_functions = self.implemented_classes
 
         self.available_channels = ['AA', 'EE', 'TT', 'XX', 'YY', 'ZZ', 'XY', 'XZ', 'YZ']
+
+        if injection is None:
+            injection = {
+                'sobhs': jnp.array([3.4e-13, 2/3]),
+                'cs': jnp.array([5.5e-12, 0]),
+                'fopt': jnp.array([4.22e-12, 9.86e-4, 2.88e-14, 200]),
+                #'galactic': jnp.array([1.5e-15, 1e-3, 2.5, 1e-3, 1e-3])
+            }
+        
+        self.injection = injection
 
         self.TDIsetup = TDIsetup
 
@@ -200,7 +211,10 @@ class StochasticContribution(GPUobject):
                 bkwargs = background_kwargs[back]
             else:
                 bkwargs = {}
-            self.backgrounds_fn += [self.implemented_classes[back](use_gpu=self.use_gpu, **bkwargs)]
+            cls = self.implemented_classes[back](use_gpu=self.use_gpu, **bkwargs)
+            if back in self.injection.keys():
+                cls.true_params = self.injection[back]
+            self.backgrounds_fn += [cls]
 
     def set_foregrounds_fn(self, foreground_kwargs):
         """
@@ -220,7 +234,10 @@ class StochasticContribution(GPUobject):
                 fkwargs = foreground_kwargs[fore]
             else:
                 fkwargs = {}
-            self.foregrounds_fn += [self.implemented_classes[fore](use_gpu=self.use_gpu, **fkwargs)]
+            cls = self.implemented_classes[fore](use_gpu=self.use_gpu, **fkwargs)
+            if fore in self.injection.keys():
+                cls.true_params = self.injection[fore]
+            self.foregrounds_fn += [cls]
 
     @property
     def implemented_backgrounds(self):
@@ -251,12 +268,23 @@ class StochasticContribution(GPUobject):
     
     @property
     def injection(self):
-        return {
-            'sobhs': jnp.array([3.4e-13, 2/3]),
-            'cs': jnp.array([5.5e-12, 0]),
-            'fopt': jnp.array([4.22e-12, 9.86e-4, 2.88e-14, 200]),
-            #'galactic': jnp.array([1.5e-15, 1e-3, 2.5, 1e-3, 1e-3])
-        }
+        return self._injection
+    
+    @injection.setter
+    def injection(self, injection):
+        if not isinstance(injection, dict):
+            raise ValueError("Injection must be a dictionary.")
+        self._injection = injection
+    
+    def update_injection(self, source, values):
+        """
+        Update the injection values for a given source.
+        Parameters:
+        source (str): The source to update.
+        values (array): The new values for the source.
+        """
+        self._injection[source] = values
+
     
     def set_responseinterp(self, response):
         """
@@ -474,6 +502,16 @@ class EnergyDensity(ABC, GPUobject):
     def __call__(self, freqs, args):
         pass
 
+    def injected_signal(self, freqs):
+        """
+        Compute the injected signal for the energy density.
+        Parameters:
+        freqs (array): Array of frequencies.
+        Returns:
+        array: Array of injected signal values.
+        """
+        return self(freqs, self.true_params)
+
     
 
 class PowerLaw(EnergyDensity):
@@ -518,7 +556,7 @@ class PowerLaw(EnergyDensity):
     
     @true_params.setter
     def true_params(self, true_params):
-        self._true_params = true_params
+        self._true_params = jnp.atleast_2d(true_params)
 
 
 
@@ -620,7 +658,7 @@ class PhaseTransitions(EnergyDensity):
     
     @true_params.setter
     def true_params(self, true_params):
-        self._true_params = true_params
+        self._true_params = jnp.atleast_2d(true_params)
 
 
 class HyperbolicTangent(EnergyDensity):

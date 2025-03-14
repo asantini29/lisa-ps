@@ -141,7 +141,13 @@ def adaptive_log_bin(freqs, power, f_min=None, f_max=None, min_bpd=5, max_bpd=50
     all_bins = jnp.arange(1, len(bin_edges)) 
     chunk_size = 100
 
-    binned_power = jnp.concatenate([bin_mean(all_bins[i:i+chunk_size]) for i in range(0, len(all_bins), chunk_size)], axis=0)
+    while True:
+        try:
+            binned_power = jnp.concatenate([bin_mean(all_bins[i:i+chunk_size]) for i in range(0, len(all_bins), chunk_size)], axis=0)
+            break
+        except:
+            chunk_size = chunk_size // 2
+    #binned_power = jnp.concatenate([bin_mean(all_bins[i:i+chunk_size]) for i in range(0, len(all_bins), chunk_size)], axis=0)
 
     
     return bin_centers, binned_power, get_bin_statistics(freqs, bin_edges)['points_per_bin']
