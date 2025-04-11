@@ -536,8 +536,11 @@ class PowerLaw(EnergyDensity):
     def __call__(self, freqs, args):
         #self.check_ndim(args)
 
-        A = jnp.array(args[:, 0])[:, jnp.newaxis]
-        n = jnp.array(args[:, 1])[:, jnp.newaxis]
+        # A = jnp.array(args[:, 0:1])#[:, jnp.newaxis]
+        # n = jnp.array(args[:, 1:2])#[:, jnp.newaxis]
+
+        A = args[:, 0:1]#[:, jnp.newaxis]
+        n = args[:, 1:2]#[:, jnp.newaxis]
 
         freqs = jnp.atleast_2d(freqs)
 
@@ -637,14 +640,14 @@ class PhaseTransitions(EnergyDensity):
     def __call__(self, freqs, args):
         #self.check_ndim(args)
 
-        Asw = jnp.asarray(args[:, 0])[:, jnp.newaxis]
-        fsw = jnp.asarray(args[:, 1])[:, jnp.newaxis]
+        Asw = args[:, 0:1]
+        fsw = args[:, 1:2]
 
         h2omega_sw = self.h2omega_sw(freqs, Asw, fsw)
 
         if self.turb:
-            Aturb = jnp.asarray(args[:, 2])[:, jnp.newaxis]
-            Tstar = jnp.asarray(args[:, 3])[:, jnp.newaxis]
+            Aturb = args[:, 2:3]
+            Tstar = args[:, 3:4]
 
             h2omega_turb = self.h2omega_turb(freqs=freqs, Aturb=Aturb, fsw=fsw, Tstar=Tstar)
 
@@ -680,13 +683,13 @@ class HyperbolicTangent(EnergyDensity):
     
     def __call__(self, freqs, args):
 
-        A = jnp.array(args[:, 0])[:, jnp.newaxis]
-        s1 = jnp.array(args[:, 1])[:, jnp.newaxis]
-        alpha = jnp.array(args[:, 2])[:, jnp.newaxis]
-        fknee = jnp.array(args[:, 3])[:, jnp.newaxis]
-        s2 = jnp.array(args[:, 4])[:, jnp.newaxis]
+        A = args[:, 0:1]
+        s1 = args[:, 1:2]
+        alpha = args[:, 2:3]
+        fknee = args[:, 3:4]
+        s2 = args[:, 4:5]
 
-        exp = jnp.array(args[:, 5])[:, jnp.newaxis] if self.fit_exp else (-7.0 / 3.0)
+        exp = args[:, 5:6] if self.fit_exp else (-7.0 / 3.0)
 
         freqs = jnp.atleast_2d(freqs)
 
@@ -730,17 +733,17 @@ class GaussianBumpHyperbolicTangent(HyperbolicTangent):
     
     def __call__(self, freqs, args):
 
-        A = jnp.array(args[:, 0])[:, jnp.newaxis]
-        s1 = jnp.array(args[:, 1])[:, jnp.newaxis]
-        alpha = jnp.array(args[:, 2])[:, jnp.newaxis]
-        fknee = jnp.array(args[:, 3])[:, jnp.newaxis]
-        s2 = jnp.array(args[:, 4])[:, jnp.newaxis]
+        A = args[:, 0:1]
+        s1 = args[:, 1:2]
+        alpha = args[:, 2:3]
+        fknee = args[:, 3:4]
+        s2 = args[:, 4:5]
     
-        A_bump = jnp.array(args[:, 5])[:, jnp.newaxis]
-        f_bump = jnp.array(args[:, 6])[:, jnp.newaxis]
-        sigma_bump = jnp.array(args[:, 7])[:, jnp.newaxis]
+        A_bump = args[:, 5:6]
+        f_bump = args[:, 6:7]
+        sigma_bump = args[:, 7:8]
 
-        exp = jnp.array(args[:, 8])[:, jnp.newaxis] if self.fit_exp else (-7.0 / 3.0)
+        exp = args[:, 8:9] if self.fit_exp else (-7.0 / 3.0)
 
         freqs = jnp.atleast_2d(freqs)
 

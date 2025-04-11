@@ -303,11 +303,30 @@ class Psd(BaseNoise, StochasticContribution):
         else:
             self.apply_splines_back = self.return_input_psd
 
+        self.background_indices = jnp.arange(self.nbackgrounds)
+
         if self.foregroundperturbation:
             self.apply_splines_fore = self.splined_signal
         else:
-            self.apply_splines_fore = self.return_input_psd          
+            self.apply_splines_fore = self.return_input_psd    
 
+        self.foreground_indices = jnp.arange(self.nforegrounds)
+
+        if self.nbackgrounds > 0:
+            self.handle_backgrounds = self._process_all_backgrounds
+        else:
+            self.handle_backgrounds = self.return_input_psd
+        
+        if self.nforegrounds > 0:
+            self.handle_foregrounds = self._process_all_foregrounds
+        else:
+            self.handle_foregrounds = self.return_input_psd
+
+    def dummy_pass(self, *args, **kwargs):
+        """
+        Dummy function to pass the input arguments.
+        """
+        pass
 
     def constmod(self, freqs,  args, **kwargs):
         """
@@ -483,7 +502,7 @@ class Psd(BaseNoise, StochasticContribution):
             Index of the background source. 
         """
 
-        h2omega = self.backgrounds_fn[index](freqs, args[index], **kwargs)
+        h2omega = self.backgrounds_fn[index](freqs, jnp.asarray(args[index]), **kwargs)
 
         return h2omega, self.nbackgrounds, index
 
@@ -542,7 +561,7 @@ class Psd(BaseNoise, StochasticContribution):
             Index of the foreground source. 
         """
 
-        h2omega = self.foregrounds_fn[index](freqs, args[index], **kwargs)
+        h2omega = self.foregrounds_fn[index](freqs, jnp.asarray(args[index]), **kwargs)
 
         return h2omega, self.nforegrounds, index
     
@@ -862,10 +881,6 @@ class Psd(BaseNoise, StochasticContribution):
         group_unique, group_index, group_inverse, group_count = self.xp.unique(groups, return_index=True, return_counts=True, return_inverse=True)
 
         nleavesmax = group_count.max().item()
-        #nin = group_unique.max().item() + 1
-        # A_full = self.xp.zeros((len(group_unique), nleavesmax, freq.shape[0]))
-        # f_center_full = self.xp.zeros((len(group_unique), nleavesmax, freq.shape[0]))
-        # width_full = self.xp.ones((len(group_unique), nleavesmax, freq.shape[0]))
 
         A_full = self.xp.full(shape=(nin, nleavesmax, 1), fill_value=0.0)#self.xp.nan)        
         f_center_full = self.xp.full(shape=(nin, nleavesmax, 1), fill_value= 0.0)#self.xp.nan)
@@ -890,8 +905,58 @@ class Psd(BaseNoise, StochasticContribution):
         return bump
     
     
+    def _process_background(self, i, freqs, backargs, backgroups, kwargs_all):
+        """Process a single background component"""
+        
+        back = self.backgrounds[i]
+        kwargs_here = kwargs_all.get(back, {})
+        
+        h2omega, base, index = self.base_background(freqs, backargs, i, **kwargs_here)
+        h2omega = self.apply_splines_back(h2omega, freqs, backargs, backgroups, base=base, index=index)
+        
+        Shs = self.convert_to_psd(freqs, h2omega)
+        Shs = self.convert_units(Shs)
+        
+        return Shs * self.isotropicresponse
     
-                
+    def _process_foreground(self, j, freqs, foreargs, foregroups, kwargs_all):
+        """Process a single foreground component"""
+        fore = self.foregrounds[j]
+        kwargs_here = kwargs_all.get(fore, {})
+        
+        Shs = self.foregrounds_fn[j](freqs, foreargs[j], **kwargs_here)
+        nin = Shs.shape[0]
+        
+        if self.foregroundperturbation:
+            if self.kwargs['perturbation_type'] == 'spline':
+                Shs = self.apply_splines_fore(Shs, freqs, foreargs, foregroups, base=self.nforegrounds, index=j)
+            elif self.kwargs['perturbation_type'] == 'bump':
+                bump_args, bump_groups = foreargs[self.nforegrounds+j:self.nforegrounds+(j+1)][0], foregroups[self.nforegrounds+j:self.nforegrounds+(j+1)][0]
+                bumps = self.log_gaussian_bump_rj(freqs, bump_args, bump_groups, nin)
+                Shs = Shs + bumps[:,:,None]
+            else:
+                raise ValueError('Invalid perturbation type')
+        
+        Shs = self.convert_units(Shs)
+        
+        return Shs * self.GBresponse
+
+    def _process_all_backgrounds(self, PSDS, freqs, backargs, backgroups, kwargs_all):
+        """Process all background components"""
+
+        for i in self.background_indices:
+            PSDS = PSDS + self._process_background(i, freqs, backargs, backgroups, kwargs_all)
+        
+        return PSDS
+    
+    def _process_all_foregrounds(self, PSDS, freqs, foreargs, foregroups, kwargs_all):
+        """Process all foreground components"""
+
+        for i in self.foreground_indices:
+            PSDS = PSDS + self._process_foreground(i, freqs, foreargs, foregroups, kwargs_all)
+        
+        return PSDS
+
 
     def __call__(self, freqs, noiseargs=[], backargs=[], foreargs=[], noisegroups=[], backgroups=[], foregroups=[], **kwargs):
         '''
@@ -913,50 +978,10 @@ class Psd(BaseNoise, StochasticContribution):
         '''
         PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
 
-        if self.nbackgrounds > 0:
+        PSDS = self.handle_backgrounds(PSDS, freqs, backargs, backgroups, kwargs)
+        PSDS = self.handle_foregrounds(PSDS, freqs, foreargs, foregroups, kwargs)
 
-            for i in range(self.nbackgrounds):
-                
-                back = self.backgrounds[i]
-                
-                kwargs_here = kwargs.get(back, {})
 
-                h2omega, base, index = self.base_background(freqs, backargs, i, **kwargs_here)
-                
-                h2omega = self.apply_splines_back(h2omega, freqs, backargs, backgroups, base=base, index=index)     
-
-                Shs = self.convert_to_psd(freqs, h2omega)
-                Shs = self.convert_units(Shs)
-                            
-                PSDS = PSDS + Shs * self.isotropicresponse 
-
-        if self.nforegrounds > 0:
-            
-            for j in range(self.nforegrounds): #compatibility with the idea of having multiple foregrounds
-                fore = self.foregrounds[j]
-                
-                kwargs_here = kwargs.get(fore, {})
-
-                Shs = self.foregrounds_fn[j](freqs, foreargs[j], **kwargs_here)
-                nin = Shs.shape[0]
-
-                #todo: still have to refactor this
-                if self.foregroundperturbation:
-
-                    if self.kwargs['perturbation_type'] == 'spline':
-
-                        Shs = self.apply_splines_fore(Shs, freqs, foreargs, foregroups, base=self.nforegrounds, index=j)     
-
-                    elif self.kwargs['perturbation_type'] == 'bump':
-                        bump_args, bump_groups = foreargs[self.nforegrounds+j:self.nforegrounds+(j+1)][0], foregroups[self.nforegrounds+j:self.nforegrounds+(j+1)][0]
-                        bumps = self.log_gaussian_bump_rj(freqs, bump_args, bump_groups, nin) 
-                        Shs = Shs + bumps[:,:,None]
-
-                    else:
-                        raise ValueError('Invalid perturbation type')
-
-                Shs = self.convert_units(Shs)
-                PSDS = PSDS + Shs * self.GBresponse 
         
 
         return PSDS
