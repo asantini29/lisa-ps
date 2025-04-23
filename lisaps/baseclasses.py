@@ -931,6 +931,7 @@ class DataContainer(GPUobject):
                 fmax=2.9e-2,
                 average=False,
                 average_kwargs=dict(f_segments=1e-5),
+                reduce_dof=True,
                 fullmatrix=False,
                 window=('kaiser', 30),
                 use_gpu=False,
@@ -948,6 +949,7 @@ class DataContainer(GPUobject):
         fmax (float, optional): Maximum frequency. Default is 2.9e-2.
         average (bool, optional): Whether to average the periodogram. Default is False. Set to 'adaptive' for adaptive binning.
         average_kwargs (dict, optional): Keyword arguments for the averaging function. Default is dict(f_segments=1e-5), which is the input of `average_peridogram_static`.
+        reduce_dof (bool, optional): Whether to reduce the degrees of freedom using the 'normalized equivalent noise bandwidth' of the window. Default is True.
         fullmatrix (bool, optional): Whether to use the full matrix. Default is False.
         window (tuple, optional): Window function and its parameter. Default is ('kaiser', 30).
         use_gpu (bool, optional): Whether to use GPU for computations. Default is False.
@@ -1019,7 +1021,10 @@ class DataContainer(GPUobject):
             self.periodogram = P
             self.sizes = sizes
 
-            self.nu = self.sizes / self.Nbw
+            if reduce_dof:
+                self.nu = self.sizes / self.Nbw
+            else:
+                self.nu = self.sizes
 
             if self.fullmatrix: #! todo: use vmap in the likelihood to make this more elegant
                 self.Y = self.nu[None, :, None, None] * self.periodogram[None, :, :, :]
