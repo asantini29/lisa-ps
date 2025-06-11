@@ -1205,7 +1205,7 @@ class DataContainer(GPUobject):
         if fig is None:
             fig = plt.figure(figsize=(6 * nchannels, 6))
         if axs is None:
-            axs = fig.subplots(1, nchannels)
+            axs = fig.subplots(1, nchannels, squeeze=True)
             axs = axs if nchannels > 1 else [axs]
         
         for i, ax in enumerate(axs):

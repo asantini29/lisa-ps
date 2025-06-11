@@ -259,8 +259,8 @@ class Likelihood(GPUobject):
         # check if all the values are finite
         logl_out[~np.isfinite(logl_out)] = -self.inf
 
-        if np.any(np.isnan(logl_out)):
-            breakpoint()
+        # if np.any(np.isnan(logl_out)):
+        #     breakpoint()
 
         if self.return_gpu:
             return logl_out

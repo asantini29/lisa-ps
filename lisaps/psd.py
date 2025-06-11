@@ -184,6 +184,9 @@ class Psd(BaseNoise, StochasticContribution):
         self.logfmin = self.xp.log10(self.fmin)
         self.logfmax = self.xp.log10(self.fmax)
 
+        self.leftedge = self.logfmin + self.xp.log10(0.99)
+        self.rightedge = self.logfmax + self.xp.log10(1.01)
+
         self.fitASDs = fitASDs
         self.fit_templates = fit_templates
         self.update_perturbation(perturbation)
@@ -385,11 +388,11 @@ class Psd(BaseNoise, StochasticContribution):
 
         knots, weights = self.prepare_interp_input(args=args, groups=groups, ngroups=ngroups)
 
-        ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1), axis=0)
+        #ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1), axis=0)
         
         logperturbation = self.logperturbation_numba(freqs=freqs, knots=knots, weights=weights)
         perturbation = 10**logperturbation
-        perturbation[ftol_mask] = self.xp.nan 
+        #perturbation[ftol_mask] = self.xp.nan 
         
         perturbation = jnp.asarray(perturbation)        
 
@@ -627,8 +630,8 @@ class Psd(BaseNoise, StochasticContribution):
             if leftedge_full.shape[0] != ngroups:
                 breakpoint()
 
-            leftedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmin), leftedge_full), axis=1)[:, None, :]
-            rightedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmax), rightedge_full), axis=1)[:, None, :]
+            leftedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.leftedge), leftedge_full), axis=1)[:, None, :]
+            rightedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.rightedge), rightedge_full), axis=1)[:, None, :]
 
             knots_full_nans[(groups_knots, inds_per_group)] = knots_full
         
@@ -663,8 +666,8 @@ class Psd(BaseNoise, StochasticContribution):
             maxgroups = self.Nknotsmax  
             
             knots_full_nans = self.xp.full((ngroups, maxgroups, 2*self.Ncov), self.xp.nan)
-            leftedge_full = self.xp.concatenate((self.xp.full((ngroups, self.Ncov), self.logfmin), leftedge_full), axis=1)[:, None, :]
-            rightedge_full = self.xp.concatenate((self.xp.full((ngroups, self.Ncov), self.logfmax), rightedge_full), axis=1)[:, None, :]
+            leftedge_full = self.xp.concatenate((self.xp.full((ngroups, self.Ncov), self.leftedge), leftedge_full), axis=1)[:, None, :]
+            rightedge_full = self.xp.concatenate((self.xp.full((ngroups, self.Ncov), self.rightedge), rightedge_full), axis=1)[:, None, :]
 
             for j, (arg, group) in enumerate(zip(args_knots, groups_knots)):
                 group = self.xp.asarray(group)
@@ -739,8 +742,8 @@ class Psd(BaseNoise, StochasticContribution):
 
             knots_full_nans = self.xp.full((ngroups, maxgroups, knots_full.shape[-1]), self.xp.nan)
 
-            leftedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmin), self.xp.full((ngroups,1), self.leftedge)), axis=1)[:, None, :]
-            rightedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmax), self.xp.full((ngroups,1), self.rightedge)), axis=1)[:, None, :]
+            leftedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.leftedge), self.xp.full((ngroups,1), self.leftedge)), axis=1)[:, None, :]
+            rightedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.rightedge), self.xp.full((ngroups,1), self.rightedge)), axis=1)[:, None, :]
 
             knots_full_nans[(groups_knots, inds_per_group)] = knots_full
         
@@ -779,8 +782,8 @@ class Psd(BaseNoise, StochasticContribution):
             maxgroups = self.Nknotsmax  
             
             knots_full_nans = self.xp.full((ngroups, maxgroups, 2*self.Ncov), self.xp.nan)
-            leftedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmin), self.xp.full((ngroups,1), self.leftedge)), axis=1)[:, None, :]
-            rightedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.logfmax), self.xp.full((ngroups,1), self.rightedge)), axis=1)[:, None, :]
+            leftedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.leftedge), self.xp.full((ngroups,1), self.leftedge)), axis=1)[:, None, :]
+            rightedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.rightedge), self.xp.full((ngroups,1), self.rightedge)), axis=1)[:, None, :]
 
             for j, (arg, group) in enumerate(zip(args_knots, groups_knots)):
                 group = self.xp.asarray(group)
