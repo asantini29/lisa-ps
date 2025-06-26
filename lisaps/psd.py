@@ -325,12 +325,6 @@ class Psd(BaseNoise, StochasticContribution):
         else:
             self.handle_foregrounds = self.return_input_psd
 
-    def dummy_pass(self, *args, **kwargs):
-        """
-        Dummy function to pass the input arguments.
-        """
-        pass
-
     def constmod(self, freqs,  args, **kwargs):
         """
         Compute the Power Spectral Density (PSD) for given frequencies and arguments.
@@ -388,11 +382,11 @@ class Psd(BaseNoise, StochasticContribution):
 
         knots, weights = self.prepare_interp_input(args=args, groups=groups, ngroups=ngroups)
 
-        #ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1), axis=0)
+        ftol_mask = self.xp.any(self.xp.any(self.xp.abs(self.xp.diff(knots)) < self.ftol, axis=-1), axis=0)
         
         logperturbation = self.logperturbation_numba(freqs=freqs, knots=knots, weights=weights)
         perturbation = 10**logperturbation
-        #perturbation[ftol_mask] = self.xp.nan 
+        perturbation[ftol_mask] = self.xp.nan 
         
         perturbation = jnp.asarray(perturbation)        
 
