@@ -198,15 +198,7 @@ def average_periodogram_static(freqs, power, f_min=None, f_max=None, f_seg=1e-5)
             The sizes of the frequency segments.
         """
 
-        f_min = f_min or freqs.min()
-        f_max = f_max or freqs.max()
-
-        mask = (freqs >= f_min) & (freqs <= f_max)
-        freqs = freqs[mask]
     
-        power = power[mask.reshape(mask.shape + (1,) * (len(power.shape) - 1))] #power can be a 2D or 3D array
-    
-
         df = (freqs[1] - freqs[0])
         if isinstance(f_seg, float):
             # Smoothing bandwidth
@@ -234,5 +226,14 @@ def average_periodogram_static(freqs, power, f_min=None, f_max=None, f_seg=1e-5)
         power_avg = jnp.array(
             [jnp.sum(power[i_seg[j]:i_seg[j+1]], axis=0) / segment_sizes[j]
             for j in range(n_seg-1)], dtype=power.dtype)
+
+        # mask out the frequencies outside the specified range
+        f_min = f_min or freqs_h.min()
+        f_max = f_max or freqs_h.max()
+
+        mask = (freqs_h >= f_min) & (freqs_h <= f_max)
+        freqs_h = freqs_h[mask]
+        power_avg = power_avg[mask]
+        segment_sizes = segment_sizes[mask]
         
         return freqs_h, power_avg, segment_sizes
