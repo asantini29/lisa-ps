@@ -26,7 +26,7 @@ python setup.py install
 
 We use [SemVer](http://semver.org/) for versioning. 
 
-Current Version: 0.0.1
+Current Version: 0.1.0
 
 ## Authors
 
