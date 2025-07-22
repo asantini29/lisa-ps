@@ -1,4 +1,7 @@
-# LISAps: 
+# LISAps
+[![DOI](https://zenodo.org/badge/761315817.svg)](https://doi.org/10.5281/zenodo.16323270)
+
+
 
 `lisaps` is a python library built to analyze stochastic signals in LISA under agnostic modelling assumptions. This is done including Akima splines in both the noise and signal models. 
 
@@ -44,8 +47,18 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE) f
 ## Citing
 
 If you use `lisa-ps` in your research, you can cite it in the following way:
-
-TODO
+```
+@software{lisaps,
+  author       = {Alessandro Santini},
+  title        = {asantini29/lisa-ps: First release},
+  month        = jul,
+  year         = 2025,
+  publisher    = {Zenodo},
+  version      = {v0.1.0},
+  doi          = {10.5281/zenodo.16323271},
+  url          = {https://doi.org/10.5281/zenodo.16323271},
+}
+```
 
 ## Aknowledgments
 We thank Nikolaos Karnesis, Jean-Baptiste Bayle, Mauro Pieroni for discussions.
