@@ -2,7 +2,7 @@
 
 `lisaps` is a python library built to analyze stochastic signals in LISA under agnostic modelling assumptions. This is done including Akima splines in both the noise and signal models. 
 
-This package is designed to interact with the `eryn` MCMC sampler (https://github.com/mikekatz04/Eryn). The paper describing the code implementation can be found on [ArXiv](https://arxiv.org/abs/2507.06300): 
+This package is designed to interact with the `eryn` MCMC sampler (https://github.com/mikekatz04/Eryn). The paper describing the code implementation can be found on [ArXiv](https://arxiv.org/abs/2507.06300).
 
 ## Installation
 First, install the GPU-accelerated Akima splines module:
