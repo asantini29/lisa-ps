@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import os
 from abc import ABC, abstractmethod
 from typing import Any, Callable
 from .baseclasses import GPUobject, TDIresponse
@@ -300,11 +301,12 @@ class StochasticContribution(GPUobject):
         ValueError: If the TDI setup is not recognized or if the response is not provided in an acceptable form.
         Notes:
         - If the response is None, default TDI response files will be used, which are valid only in the interval [3e-5, 5.9e-2] Hz.
-        - The default files are located in the directory '/data/asantini/packages/lisa-ps/utils/'.
+        - The default files are located in the directory 'lisa-ps/utils/'.
         """
 
         if response is None: #use default files
-            TFdir = '/data/asantini/packages/lisa-ps/utils/'
+            # get the package path
+            TFdir = os.path.join(os.path.dirname(__file__), '..', 'utils/')
 
             if self.custom_armlength: #assume constant equal armlengths
                 files = ['TDItransferfunction_AET_equal.csv', 'TDItransferfunction_AET_equal_nosagnac.csv', 'TDItransferfunction_XYZreal_equal.csv', 'TDItransferfunction_XYZimag_equal.csv']
