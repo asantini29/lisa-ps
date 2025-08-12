@@ -572,34 +572,60 @@ class Psd(BaseNoise, StochasticContribution):
         Returns:
         numpy.ndarray: Transposed log perturbation array with shape (n_knots, n_weights, n_freqs).
         """
-        
+        tic = time.time()
         logperturbation = self.interp(self.xp.log10(freqs), knots, weights)
+        toc = time.time()
+
+        print(f'- time elapsed for interpolation: {toc - tic}')
 
         return logperturbation.transpose(1, 2, 0)
     
-    def prepare_interp_input_with_edges(self, args, groups, ngroups=0):
+    def _compute_inds_per_group(self, group):
         """
-        Prepares the input data for interpolation using Numba.
-        Parameters:
-        -----------
-        args : list
-            A list of arrays where the first element contains the edges and weights, 
-            and the subsequent elements contain the knots. The shape of the arrays 
-            determines the processing path.
-        groups : list
-            A list of arrays where the first element contains the group indices for 
-            the edges and weights, and the subsequent elements contain the group 
-            indices for the knots.
-        ngroups : int, optional
-            Number of groups (default is 0).
-        Returns:
-        --------
-        sortedpositions : ndarray
-            An array of sorted positions for interpolation.
-        sortedweights : ndarray
-            An array of sorted weights corresponding to the sorted positions.
+        Return per-group index positions given a group membership array.
+        Optimized for sorted integer group arrays that may skip some IDs.
+        Falls back to xp.unique for unsorted or non-integer cases.
         """
+        tic = time.time()
+        group = self.xp.asarray(group)
 
+        # Fast path: sorted integers (contiguous or with gaps)
+        if self.xp.issubdtype(group.dtype, self.xp.integer):
+            if self.xp.all(group[1:] >= group[:-1]):
+                # Find start index for each unique group label
+                diff_mask = self.xp.r_[True, group[1:] != group[:-1]]
+                group_ids = group[diff_mask]          # unique IDs in sorted order
+                group_index = self.xp.nonzero(diff_mask)[0]
+
+                # Map each group ID to its start index
+                max_id = int(group_ids.max())
+                lookup = self.xp.full(max_id + 1, -1, dtype=group_index.dtype)
+                lookup[group_ids] = group_index
+
+                # Per-element counter within its group
+                start_for_elem = lookup[group]
+                inds_per_group = self.xp.arange(group.size) - start_for_elem
+                toc = time.time()
+                print(f'-- time elapsed: {toc - tic}')
+                return inds_per_group
+
+        # General fallback
+        _, group_index, group_inverse = self.xp.unique(
+            group, return_index=True, return_inverse=True
+        )
+        diff_temp = self.xp.ones_like(group_inverse)
+        diff_temp[1:] = (~self.xp.diff(group_inverse).astype(bool)).astype(int)
+        inds_per_group = self.xp.cumsum(diff_temp) - 1
+        inds_per_group -= inds_per_group[group_index][group_inverse]
+        toc = time.time()
+        print(f'-- time elapsed with unique: {toc - tic}')
+
+        return inds_per_group
+
+    
+    def prepare_interp_input_deltas(self, args, groups, ngroups=0):
+        """
+        """
         if (args[1].shape[-1] == self.Ncov + 1) or (len(args) == 2): # this means all the weights are together or there is only one spline
             edges_weights, knots_full = self.xp.asarray(args[0]), self.xp.asarray(args[1]) #always work along the `1` axis for frequency operations # TODO may have to change this, maybe (Ncov, Nin, Nfreq) is better
             groups_knots = groups[1]           
@@ -607,7 +633,8 @@ class Psd(BaseNoise, StochasticContribution):
             leftedge_full = edges_weights[:, 0::2]
             rightedge_full = edges_weights[:, 1::2]
 
-            #? group_unique, group_index, group_inverse, group_count = self.xp.unique(groups_knots, return_index=True, return_counts=True, return_inverse=True)
+            np.ins
+
             group_unique, group_index, group_inverse = self.xp.unique(groups_knots, return_index=True, return_counts=False, return_inverse=True)
 
             diff_temp = self.xp.ones_like(group_inverse)
@@ -687,6 +714,102 @@ class Psd(BaseNoise, StochasticContribution):
             sortedpositions = self.xp.take_along_axis(positions, order, axis=1).transpose(2,0,1)
             sortedweights = self.xp.take_along_axis(weights, order, axis=1).transpose(2,0,1)
 
+        return sortedpositions, sortedweights
+        
+    
+    def prepare_interp_input_with_edges(self, args, groups, ngroups=0):
+        """
+        Prepares the input data for interpolation using Numba.
+        Parameters:
+        -----------
+        args : list
+            A list of arrays where the first element contains the edges and weights, 
+            and the subsequent elements contain the knots. The shape of the arrays 
+            determines the processing path.
+        groups : list
+            A list of arrays where the first element contains the group indices for 
+            the edges and weights, and the subsequent elements contain the group 
+            indices for the knots.
+        ngroups : int, optional
+            Number of groups (default is 0).
+        Returns:
+        --------
+        sortedpositions : ndarray
+            An array of sorted positions for interpolation.
+        sortedweights : ndarray
+            An array of sorted weights corresponding to the sorted positions.
+        """
+        tic = time.time()
+        if (args[1].shape[-1] == self.Ncov + 1) or (len(args) == 2):
+            edges_weights = self.xp.asarray(args[0])
+            knots_full = self.xp.asarray(args[1])
+            groups_knots = groups[1]
+
+            leftedge_full = edges_weights[:, 0::2]
+            rightedge_full = edges_weights[:, 1::2]
+
+            inds_per_group = self._compute_inds_per_group(groups_knots)
+
+            ngroups = leftedge_full.shape[0]
+            maxgroups = self.Nknotsmax
+            knots_full_nans = self.xp.full((ngroups, maxgroups, knots_full.shape[-1]), self.xp.nan)
+
+            leftedge_full = self.xp.concatenate(
+                (self.xp.full((ngroups, 1), self.leftedge), leftedge_full), axis=1
+            )[:, None, :]
+            rightedge_full = self.xp.concatenate(
+                (self.xp.full((ngroups, 1), self.rightedge), rightedge_full), axis=1
+            )[:, None, :]
+
+            knots_full_nans[(groups_knots, inds_per_group)] = knots_full
+            knots_full_nans = self.xp.concatenate((leftedge_full, knots_full_nans, rightedge_full), axis=1)
+
+            positions = knots_full_nans[:, :, :1]
+            weights = knots_full_nans[:, :, 1:]
+
+            order = self.xp.argsort(positions, axis=1)
+            sortedpositions = self.xp.take_along_axis(positions, order, axis=1)
+
+            if args[1].shape[-1] == self.Ncov + 1:
+                sortedpositions = self.xp.repeat(sortedpositions, self.Ncov, axis=-1).transpose(2, 0, 1)
+            else:
+                sortedpositions = sortedpositions.transpose(2, 0, 1)
+
+            sortedweights = self.xp.take_along_axis(weights, order, axis=1).transpose(2, 0, 1)
+
+        else:
+            edges_weights = self.xp.asarray(args[0])
+            leftedge_full = edges_weights[:, 0::2]
+            rightedge_full = edges_weights[:, 1::2]
+
+            args_knots = [self.xp.asarray(arg) for arg in args[1:]]
+            groups_knots = groups[1:]
+            ngroups = groups[0].shape[0]
+            maxgroups = self.Nknotsmax  
+
+            knots_full_nans = self.xp.full((ngroups, maxgroups, 2*self.Ncov), self.xp.nan)
+            leftedge_full = self.xp.concatenate(
+                (self.xp.full((ngroups, self.Ncov), self.leftedge), leftedge_full), axis=1
+            )[:, None, :]
+            rightedge_full = self.xp.concatenate(
+                (self.xp.full((ngroups, self.Ncov), self.rightedge), rightedge_full), axis=1
+            )[:, None, :]
+
+            for j, (arg, group) in enumerate(zip(args_knots, groups_knots)):
+                inds_per_group = self._compute_inds_per_group(group)
+                knots_full_nans[:, :, j][(group, inds_per_group)] = arg[:, 0]
+                knots_full_nans[:, :, self.Ncov + j][(group, inds_per_group)] = arg[:, 1]
+
+            knots_full_nans = self.xp.concatenate((leftedge_full, knots_full_nans, rightedge_full), axis=1)
+
+            positions = knots_full_nans[:, :, :self.Ncov]
+            weights = knots_full_nans[:, :, self.Ncov:]
+
+            order = self.xp.argsort(positions, axis=1)
+            sortedpositions = self.xp.take_along_axis(positions, order, axis=1).transpose(2, 0, 1)
+            sortedweights = self.xp.take_along_axis(weights, order, axis=1).transpose(2, 0, 1)
+        toc = time.time()
+        print(f'- total time: {toc - tic}')
         return sortedpositions, sortedweights
     
     def prepare_interp_input_fixed_edges(self, args, groups, ngroups=0):
@@ -971,14 +1094,21 @@ class Psd(BaseNoise, StochasticContribution):
 
         Returns:
         - PSDS (array-like): The total PSD in each channel.
-
+        
         '''
+        tic = time.time()
         PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
-
+        toc = time.time()
+        print(f'--- noise time: {toc-tic}')
+        tic = time.time()
         PSDS = self.handle_backgrounds(PSDS, freqs, backargs, backgroups, kwargs)
+        toc = time.time()
+        print(f'--- backgrounds time: {toc-tic}')
+        tic = time.time()
         PSDS = self.handle_foregrounds(PSDS, freqs, foreargs, foregroups, kwargs)
 
-
+        toc = time.time()
+        print(f'--- foreground time: {toc-tic}')
         
 
         return PSDS
