@@ -112,13 +112,13 @@ class StochasticContribution(GPUobject):
                 channels = [channels]
             self.channels = channels
         else:
-            if TDIsetup == 'AET':
+            if TDIsetup.split(' ')[0] == 'AET':
                 self.channels = ['AA', 'EE', 'TT']
-            elif TDIsetup == 'XYZ':
+            elif TDIsetup.split(' ')[0] == 'XYZ':
                 self.channels = ['XX', 'YY', 'ZZ', 'XY', 'XZ', 'YZ']
             else:
-                raise ValueError('TDIsetup not recognized. Choose between AET and XYZ')
-        
+                raise ValueError('TDIsetup not recognized. Choose between `AET 1.5`, `AET 2.0`, `XYZ 1.5`, `XYZ 2.0`')
+
         # backgrounds setup
         if not isinstance(backgrounds, list):
             backgrounds = [backgrounds]
@@ -314,9 +314,9 @@ class StochasticContribution(GPUobject):
             else: #assume average armlengths
                 files = ['TDItransferfunction_AET.csv', 'TDItransferfunction_AET_nosagnac.csv', 'TDItransferfunction_XYZreal.csv', 'TDItransferfunction_XYZimag.csv']
 
-            if self.TDIsetup == 'AET':
+            if self.TDIsetup.split(' ')[0] == 'AET':
                 response = TFdir + files[0] if self.correct_sagnac else TFdir + files[1]
-            elif self.TDIsetup == 'XYZ':
+            elif self.TDIsetup.split(' ')[0] == 'XYZ':
                 response = [TFdir + files[2], TFdir + files[3]]
 
             else:
@@ -388,7 +388,7 @@ class StochasticContribution(GPUobject):
         analytical (bool): Flag indicating whether to use the analytical expression for the GB response.
         """
 
-        if self.TDIsetup == 'AET':
+        if self.TDIsetup.split(' ')[0] == 'AET':
             idxs = [self.available_channels.index(channel) for channel in self.channels]
         if analytical:
             self.GBresponse = self.analytical_GBresponse(freqs)[:, idxs]
@@ -420,8 +420,10 @@ class StochasticContribution(GPUobject):
         
         x = 2 * jnp.pi * freqs * self.armlength
 
-        respA =  6 * x**2 * jnp.sin(x)**2 
-        respE =  6 * x**2 * jnp.sin(x)**2
+        tdi2_factor = 4 * jnp.sin(2 * x)**2 if self.TDIsetup.split(' ')[1] == '2.0' else 1.0
+
+        respA =  6 * x**2 * jnp.sin(x)**2 * tdi2_factor
+        respE =  6 * x**2 * jnp.sin(x)**2 * tdi2_factor
         respT =  0.0 * x**2
         
         return jnp.array([respA, respE, respT]).T

@@ -54,7 +54,7 @@ def log_bin(freqs, power, bins_per_decade=10):
     
     return bin_centers, binned_power, bin_counts
 
-def adaptive_log_bin(freqs, power, f_min=None, f_max=None, min_bpd=5, max_bpd=50, order='increasing'):
+def adaptive_log_bin(freqs, power, f_min=None, f_max=None, min_bpd=5, max_bpd=50, order='increasing', **kwargs):
     """
     Adaptive logarithmic binning with varying bins per decade.
     
@@ -175,7 +175,7 @@ def get_bin_statistics(freqs, log_bin_edges):
         'bin_edges_hz': 10**log_bin_edges,
     }
 
-def average_periodogram_static(freqs, power, f_min=None, f_max=None, f_seg=1e-5):
+def average_periodogram_static(freqs, power, f_min=None, f_max=None, f_segments=1e-5, **kwargs):
         """
         Average the periodogram matrix over segments. Snippet credits: Nikolaos Karnesis.
         
@@ -185,7 +185,7 @@ def average_periodogram_static(freqs, power, f_min=None, f_max=None, f_seg=1e-5)
             The frequencies of the periodogram matrix.
          power : array
             The periodogram matrix to average.
-        f_seg : float or array_like
+        f_segments : float or array_like
             The segment frequency or an array of bin edges.
             
         Returns
@@ -200,27 +200,27 @@ def average_periodogram_static(freqs, power, f_min=None, f_max=None, f_seg=1e-5)
 
     
         df = (freqs[1] - freqs[0])
-        if isinstance(f_seg, float):
+        if isinstance(f_segments, float):
             # Smoothing bandwidth
-            bandwidth = int(f_seg / df)
+            bandwidth = int(f_segments / df)
             # Segment frequencies
-            f_seg_arr = freqs[0::bandwidth]
+            f_segments_arr = freqs[0::bandwidth]
             # Add the last frequency if it is not included
-            if freqs[-1] not in f_seg_arr:
-                f_seg_arr = jnp.concatenate((f_seg_arr, jnp.atleast_1d(freqs[-1])))
-        elif hasattr(f_seg, '__array__') or isinstance(f_seg, list):
-            f_seg_arr = jnp.asarray(f_seg)
+            if freqs[-1] not in f_segments_arr:
+                f_segments_arr = jnp.concatenate((f_segments_arr, jnp.atleast_1d(freqs[-1])))
+        elif hasattr(f_segments, '__array__') or isinstance(f_segments, list):
+            f_segments_arr = jnp.asarray(f_segments)
         else:
             raise TypeError("f0 should be a float or array_like")
         
         # Number of segments
-        n_seg = len(f_seg_arr)
+        n_seg = len(f_segments_arr)
         # Indices of the segment bounds
-        i_seg = np.round(f_seg_arr / df).astype(int)
+        i_seg = np.round(f_segments_arr / df).astype(int)
         # Sizes of all intervals
         segment_sizes = i_seg[1:] - i_seg[:-1]
         # Middle frequencies
-        freqs_h = (f_seg_arr[:-1] + f_seg_arr[1:]) / 2.0
+        freqs_h = (f_segments_arr[:-1] + f_segments_arr[1:]) / 2.0
 
         # Compute the averages over each segment
         power_avg = jnp.array(

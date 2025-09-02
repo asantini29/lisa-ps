@@ -576,7 +576,7 @@ class Psd(BaseNoise, StochasticContribution):
         logperturbation = self.interp(self.xp.log10(freqs), knots, weights)
         toc = time.time()
 
-        print(f'- time elapsed for interpolation: {toc - tic}')
+        # print(f'- time elapsed for interpolation: {toc - tic}')
 
         return logperturbation.transpose(1, 2, 0)
     
@@ -606,7 +606,7 @@ class Psd(BaseNoise, StochasticContribution):
                 start_for_elem = lookup[group]
                 inds_per_group = self.xp.arange(group.size) - start_for_elem
                 toc = time.time()
-                print(f'-- time elapsed: {toc - tic}')
+                # print(f'-- time elapsed: {toc - tic}')
                 return inds_per_group
 
         # General fallback
@@ -618,7 +618,7 @@ class Psd(BaseNoise, StochasticContribution):
         inds_per_group = self.xp.cumsum(diff_temp) - 1
         inds_per_group -= inds_per_group[group_index][group_inverse]
         toc = time.time()
-        print(f'-- time elapsed with unique: {toc - tic}')
+        # print(f'-- time elapsed with unique: {toc - tic}')
 
         return inds_per_group
 
@@ -809,7 +809,7 @@ class Psd(BaseNoise, StochasticContribution):
             sortedpositions = self.xp.take_along_axis(positions, order, axis=1).transpose(2, 0, 1)
             sortedweights = self.xp.take_along_axis(weights, order, axis=1).transpose(2, 0, 1)
         toc = time.time()
-        print(f'- total time: {toc - tic}')
+        # print(f'- total time: {toc - tic}')
         return sortedpositions, sortedweights
     
     def prepare_interp_input_fixed_edges(self, args, groups, ngroups=0):
@@ -1099,16 +1099,16 @@ class Psd(BaseNoise, StochasticContribution):
         tic = time.time()
         PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
         toc = time.time()
-        print(f'--- noise time: {toc-tic}')
+        # print(f'--- noise time: {toc-tic}')
         tic = time.time()
         PSDS = self.handle_backgrounds(PSDS, freqs, backargs, backgroups, kwargs)
         toc = time.time()
-        print(f'--- backgrounds time: {toc-tic}')
+        # print(f'--- backgrounds time: {toc-tic}')
         tic = time.time()
         PSDS = self.handle_foregrounds(PSDS, freqs, foreargs, foregroups, kwargs)
 
         toc = time.time()
-        print(f'--- foreground time: {toc-tic}')
+        # print(f'--- foreground time: {toc-tic}')
         
 
         return PSDS

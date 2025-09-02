@@ -176,7 +176,6 @@ class Likelihood(GPUobject):
         Returns:
             numpy.ndarray: The evaluated log-likelihood values.
         """
-        tic = time.time()
         if not isinstance(args, list):
             args = [args]
 
@@ -225,7 +224,6 @@ class Likelihood(GPUobject):
                 foreground_args += [foreground_args_all[j][inds]]
                 foreground_groups += [foreground_groups_all[j][inds]]
 
-            _ = time.time()
             psd = self.psd_fn(self.data.freqs,
                                    noise_args,
                                    background_args,
@@ -235,7 +233,6 @@ class Likelihood(GPUobject):
                                    foreground_groups,
                                    **kwargs)
             
-            print(f'PSD: {time.time() - _}')
             
             if self.nsource_wf_gen > 0:
                 h = self.xp.zeros(shape=(self.freqs[0]))
@@ -256,10 +253,8 @@ class Likelihood(GPUobject):
                 mempool = xp.get_default_memory_pool()
                 mempool.free_all_blocks()
 
-            _ = time.time()
             logl = self.compute_logl(psd, ntilde, ntildentilde).real
             logl_all.append(logl)
-            print(f'likelihood summation alone: {time.time() - _}')
 
         logl_out = np.concatenate(logl_all)
         
@@ -268,7 +263,6 @@ class Likelihood(GPUobject):
 
         # if np.any(np.isnan(logl_out)):
         #     breakpoint()
-        print(f'FULL LIKE: {time.time() - tic}')
         if self.return_gpu:
             return logl_out
         else:

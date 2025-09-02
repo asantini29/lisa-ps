@@ -166,7 +166,7 @@ class BaseNoise(GPUobject):
         units (str): Units for the noise ('hertz', 'meters', or 'strain').
     """
 
-    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, custom_armlength=None, T=1.0, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', scirdv1=False, filtered=True, interpkwargs=dict(kind='akima', axis=1)):
+    def __init__(self, asdTM=2.4e-15, asdOMS=7.9e-12, fkneeTM=0.4e-3, fkneeOMS=2e-3, custom_armlength=None, T=1.0, fs=None, Ncov=None, channels='AET', use_gpu=False, units='strain', tdi2=True, scirdv1=False, filtered=True, interpkwargs=dict(kind='akima', axis=1)):
         """
         Initialize the base class for LISA simulation.
         Parameters:
@@ -195,6 +195,8 @@ class BaseNoise(GPUobject):
             If True, use GPU acceleration (default is False).
         units : str, optional
             Units for the noise, either 'strain' or other (default is 'strain').
+        tdi2: bool, optional
+            If True, use second generation TDI (default is True).
         scirdv1 : bool, optional
             If True, use SCIR DV1 noise parameters (default is False).
         filtered : bool, optional
@@ -284,6 +286,13 @@ class BaseNoise(GPUobject):
                 self.TDIsetup = 'AET'
 
         self.units = units
+        self.tdi2 = tdi2
+        if self.tdi2:
+            self.TDIsetup += ' 2.0'
+            self.tdi_common = self.tdi_common_secondgen
+        else:
+            self.TDIsetup += ' 1.5'
+            self.tdi_common = self.tdi_common_firstgen
 
     @property
     def asdTM(self):
@@ -448,15 +457,24 @@ class BaseNoise(GPUobject):
         else:
             raise ValueError('units must be `hertz`, `meters`, or `strain`')
         
-    def tdi_common(self, freqs):
+    def tdi_common_firstgen(self, freqs):
         '''
-        TDI common factor for both XYZ and AET
+        TDI common factor for both XYZ and AET (First generation TDI)
 
         Args:
             freqs (float): frequencies [Hz]
         '''
-        return 16 * jnp.sin(2 * jnp.pi * freqs * self.armlength) * jnp.sin(4 * jnp.pi * freqs * self.armlength)**2
+        return 4 * jnp.sin(2 * jnp.pi * freqs * self.armlength)
     
+    def tdi_common_secondgen(self, freqs):
+        '''
+        TDI common factor for both XYZ and AET (Second generation TDI)
+
+        Args:
+            freqs (float): frequencies [Hz]
+        '''
+        return 4 * jnp.sin(4 * jnp.pi * freqs * self.armlength)**2 * self.tdi_common_firstgen(freqs)
+
     def tdi_common_AET(self, freqs):
         return 2 * self.tdi_common(freqs) * jnp.sin(2 * jnp.pi * freqs * self.armlength)
     
@@ -609,7 +627,7 @@ class BaseNoise(GPUobject):
         return self.tdi_tf_oms_T(freqs) * self.get_oms_noise(asdOMS, freqs)
 
     @partial(jax.jit, static_argnums=(0,))
-    def get_SA_base(self, asdTM, asdOMS, freqs):
+    def get_SA(self, asdTM, asdOMS, freqs):
         """
         Calculate the sum of the squares of the test mass and optical metrology system acceleration noise.
         Parameters:
@@ -623,7 +641,7 @@ class BaseNoise(GPUobject):
         return self.testmass_A(asdTM, freqs)**2 + self.oms_A(asdOMS, freqs)**2 
     
     @partial(jax.jit, static_argnums=(0,))
-    def get_ST_base(self, asdTM, asdOMS, freqs):
+    def get_ST(self, asdTM, asdOMS, freqs):
         """
         Calculate the sum of the squares of the test mass and optical metrology system acceleration noise.
         Parameters:
@@ -635,44 +653,6 @@ class BaseNoise(GPUobject):
         """
 
         return self.testmass_T(asdTM, freqs)**2 + self.oms_T(asdOMS, freqs)**2 
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def get_SA_scirdv1(self, asdTM, asdOMS, freqs):
-        '''
-        Uncorrelated noise in the A, E tdi channels. Code from: https://mikekatz04.github.io/LISAanalysistools/build/html/index.html#
-        '''
-
-        x = 2.0 * np.pi * self.armlength * freqs
-
-        Spm = self.get_testmass_noise(asdTM, freqs) ** 2
-        Sop = self.get_oms_noise(asdOMS, freqs) ** 2
-
-        Sa = (
-            8.0
-            * jnp.sin(x) ** 2
-            * (
-                2.0 * Spm * (3.0 + 2.0 * jnp.cos(x) + jnp.cos(2 * x))
-                + Sop * (2.0 + jnp.cos(x))
-            )
-        )
-
-        return Sa
-        
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def get_ST_scirdv1(self, asdTM, asdOMS, freqs):
-        '''
-        Uncorrelated noise in the T tdi channel. Code from: https://mikekatz04.github.io/LISAanalysistools/build/html/index.html#
-        '''
-        x = 2.0 * np.pi * self.armlength * freqs
-
-        Spm = self.get_testmass_noise(asdTM, freqs) ** 2
-        Sop = self.get_oms_noise(asdOMS, freqs) ** 2
-
-        return (
-            16.0 * Sop * (1.0 - jnp.cos(x)) * jnp.sin(x) ** 2
-            + 128.0 * Spm * jnp.sin(x) ** 2 * jnp.sin(0.5 * x) ** 4
-        )
     
     #! XYZ
     def testmass_XX(self, asdTM, freqs):
@@ -780,14 +760,6 @@ class BaseNoise(GPUobject):
             self.get_testmass_noise = self.testmass_single
             self.get_oms_noise = self.oms_in_isi_carrier
 
-        if self.scirdv1:
-            self.get_SA = self.get_SA_scirdv1
-            self.get_ST = self.get_ST_scirdv1
-        else:
-            self.get_SA = self.get_SA_base
-            self.get_ST = self.get_ST_base
-
-    
     @partial(jax.vmap, in_axes=(None, 0, 0, None))
     def compute_PSDS(self, asdTM, asdOMS, freqs):
         """
@@ -930,7 +902,8 @@ class DataContainer(GPUobject):
                 fmin=1e-4,
                 fmax=2.9e-2,
                 average=False,
-                average_kwargs=dict(f_segments=1e-5),
+                adaptive_average=True,
+                average_kwargs=dict(f_segments=1e-5, min_bpd=100, max_bpd=500, order='increasing'),
                 reduce_dof=True,
                 fullmatrix=False,
                 window=('kaiser', 30),
@@ -948,7 +921,9 @@ class DataContainer(GPUobject):
         fmin (float, optional): Minimum frequency. Default is 1e-4.
         fmax (float, optional): Maximum frequency. Default is 2.9e-2.
         average (bool, optional): Whether to average the periodogram. Default is False. Set to 'adaptive' for adaptive binning.
-        average_kwargs (dict, optional): Keyword arguments for the averaging function. Default is dict(f_segments=1e-5), which is the input of `average_peridogram_static`.
+        adaptive_average (bool, optional): Whether to use adaptive averaging. Default is True.
+        average_kwargs (dict, optional): Keyword arguments for the averaging function. Default is dict(f_segments=1e-5, min_bpd=100, max_bpd=500, order='increasing'), 
+            where `f_segments` is the frequency segment size for `static_average_periodogram` and the remaining arguments are for `adaptive_average_periodogram`.
         reduce_dof (bool, optional): Whether to reduce the degrees of freedom using the 'normalized equivalent noise bandwidth' of the window. Default is True.
         fullmatrix (bool, optional): Whether to use the full matrix. Default is False.
         window (tuple, optional): Window function and its parameter. Default is ('kaiser', 30).
@@ -1008,8 +983,10 @@ class DataContainer(GPUobject):
         P = self.periodogram_matrix(self.dtilde)
 
         if average: # without signal we can use an averaged likelihood
-
-            self.average_periodogram = adaptive_log_bin if average == 'adaptive' else average_periodogram_static
+            if adaptive_average:
+                self.average_periodogram = adaptive_log_bin
+            else:
+                self.average_periodogram = average_periodogram_static
 
             freqs, P, sizes = self.average_periodogram(freqs, P, fmin, fmax, **average_kwargs)
 
@@ -1050,6 +1027,17 @@ class DataContainer(GPUobject):
             self.weights = jnp.asarray(weights[self.frequencymask])[None, :, :]
         else:
             self.weights = jnp.ones_like(self.dtilde)[None, :, :]
+
+    
+    def transform_psd(self):
+        """
+        dictionary containing functions to convert a psd to either asd or characteristic strain
+        """
+        return {
+            'psd': lambda psd: psd,
+            'asd': lambda psd: np.sqrt(psd),
+            'char_strain': lambda psd: np.sqrt(psd * self.freqs)
+        }
 
     def get_Xtilde(self, d=None):
         """
@@ -1176,8 +1164,31 @@ class DataContainer(GPUobject):
         nenbw = n * np.sum(window**2) / np.sum(window)**2
 
         return window, nenbw
-    
-    def loglog(self, fig=None, axs=None, channels=None, **kwargs):
+
+    def apply_response(self, Nx, armlength):
+        """
+        Apply the instrument response to the data.
+
+        Parameters
+        ----------
+        Nx : array-like
+            The data to which the instrument response is applied.
+        armlength : float
+            The arm length to use for the instrument response.
+
+        Returns
+        -------
+        array-like
+            The data with the instrument response applied.
+        """
+        x = 2 * np.pi * self.freqs * armlength / C
+        R_tilde_AE = 9/20 * 1 / (1 + 0.7 * (x)**2)
+        R_tilde_T = 9/20 * (x)**6 / (1.8*1e3+0.7*(x)**8)
+
+        R_tilde = np.array([R_tilde_AE, R_tilde_AE, R_tilde_T]).T
+        return Nx / (16 * np.sin(x[:,None])**2 * (x[:,None])**2 * R_tilde)
+
+    def loglog(self, fig=None, axs=None, channels=None, type='psd', apply_response=False, armlength=2.5e9, **kwargs):
         """
         Plot the log-log periodogram of the data.
         
@@ -1189,6 +1200,12 @@ class DataContainer(GPUobject):
             The axes to plot the log-log periodogram on. If not provided, a new axes will be created.
         channels : list, optional
             The channels to plot the log-log periodogram of. If not provided, all channels will be plotted.
+        type: str, optional
+            The type of plot to create. Can be 'psd' for power spectral density, 'asd' for amplitude spectral density, or 'char_strain' for characteristic strain.
+        apply_response : bool, optional
+            Whether to apply the instrument response to the data before plotting. Implemented only for AET configuration. Default is False.
+        armlength : float, optional
+            The arm length to use for the instrument response. Only used if apply_response is True.
         **kwargs : dict
             Additional keyword arguments to pass to the plot
         """
@@ -1207,13 +1224,39 @@ class DataContainer(GPUobject):
         if axs is None:
             axs = fig.subplots(1, nchannels, squeeze=True)
             axs = axs if nchannels > 1 else [axs]
-        
+
+        assert type in ['psd', 'asd', 'char_strain'], "type must be 'psd', 'asd', or 'char_strain'"
+        ylabels = {
+            'psd': 'PSD [Hz$^{-1}$]',
+            'asd': 'ASD [Hz$^{-1/2}$]',
+            'char_strain': 'Characteristic Strain'
+        }
+
+        tmp = self.periodogram.real.copy()
+        if apply_response:
+            tmp = self.apply_response(tmp, armlength)
+
         for i, ax in enumerate(axs):
-            ax.loglog(self.freqs, self.periodogram.real[:, channels[i]], **kwargs)
+            ax.loglog(self.freqs, 
+                      self.transform_psd().get(type)(tmp[:, channels[i]]), 
+                      **kwargs)
             ax.set_xlabel('Frequency [Hz]')
             #ax.set_title(f'Channel {self.channels[i]}')
 
-        axs[0].set_ylabel('PSD [Hz$^{-1}$]')
+        axs[0].set_ylabel(ylabels[type])
 
         plt.tight_layout()
         return fig, axs
+    
+
+class DataContainerExtraPSD(DataContainer):
+
+    def __init__(self, psd_fn=None, *args, **kwargs):
+        self.psd_fn = psd_fn 
+        super().__init__(*args, **kwargs)
+
+    def periodogram_matrix(self, data_fd):
+        data_periodogram = super().periodogram_matrix(data_fd)
+        extra_psd = self.psd_fn(self.all_freqs) if self.psd_fn else 0
+
+        return data_periodogram + extra_psd
