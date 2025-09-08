@@ -91,7 +91,7 @@ class StochasticContribution(GPUobject):
                 'sobhs': jnp.array([3.4e-13, 2/3]),
                 'cs': jnp.array([5.5e-12, 0]),
                 'fopt': jnp.array([4.22e-12, 9.86e-4, 2.88e-14, 200]),
-                #'galactic': jnp.array([1.5e-15, 1e-3, 2.5, 1e-3, 1e-3])
+                'galactic': jnp.array([1.5e-15, 1e-3, 2.5, 1e-3, 1e-3])
             }
         
         self.injection = injection
@@ -420,7 +420,7 @@ class StochasticContribution(GPUobject):
         
         x = 2 * jnp.pi * freqs * self.armlength
 
-        tdi2_factor = 4 * jnp.sin(2 * x)**2 if self.TDIsetup.split(' ')[1] == '2.0' else 1.0
+        tdi2_factor = 4 * jnp.sin(2 * x)**4 if self.TDIsetup.split(' ')[1] == '2.0' else 1.0
 
         respA =  6 * x**2 * jnp.sin(x)**2 * tdi2_factor
         respE =  6 * x**2 * jnp.sin(x)**2 * tdi2_factor
@@ -506,6 +506,14 @@ class EnergyDensity(ABC, GPUobject):
     def __call__(self, freqs, args):
         pass
 
+    @property
+    def true_params(self):
+        return self._true_params
+    
+    @true_params.setter
+    def true_params(self, true_params):
+        self._true_params = jnp.atleast_2d(true_params)
+
     def injected_signal(self, freqs):
         """
         Compute the injected signal for the energy density.
@@ -556,14 +564,6 @@ class PowerLaw(EnergyDensity):
     def h2omega(self, freqs, A, n):
         return (A * (freqs / self.fknee)**n)[:, :, jnp.newaxis]
         
-    
-    @property
-    def true_params(self):
-        return self._true_params
-    
-    @true_params.setter
-    def true_params(self, true_params):
-        self._true_params = jnp.atleast_2d(true_params)
 
 
 
@@ -658,14 +658,6 @@ class PhaseTransitions(EnergyDensity):
             return h2omega_sw + h2omega_turb
 
         return h2omega_sw
-    
-    @property
-    def true_params(self):
-        return self._true_params
-    
-    @true_params.setter
-    def true_params(self, true_params):
-        self._true_params = jnp.atleast_2d(true_params)
 
 
 class HyperbolicTangent(EnergyDensity):

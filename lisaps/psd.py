@@ -557,7 +557,6 @@ class Psd(BaseNoise, StochasticContribution):
         index: int
             Index of the foreground source. 
         """
-
         h2omega = self.foregrounds_fn[index](freqs, jnp.asarray(args[index]), **kwargs)
 
         return h2omega, self.nforegrounds, index
@@ -621,101 +620,6 @@ class Psd(BaseNoise, StochasticContribution):
         # print(f'-- time elapsed with unique: {toc - tic}')
 
         return inds_per_group
-
-    
-    def prepare_interp_input_deltas(self, args, groups, ngroups=0):
-        """
-        """
-        if (args[1].shape[-1] == self.Ncov + 1) or (len(args) == 2): # this means all the weights are together or there is only one spline
-            edges_weights, knots_full = self.xp.asarray(args[0]), self.xp.asarray(args[1]) #always work along the `1` axis for frequency operations # TODO may have to change this, maybe (Ncov, Nin, Nfreq) is better
-            groups_knots = groups[1]           
-    
-            leftedge_full = edges_weights[:, 0::2]
-            rightedge_full = edges_weights[:, 1::2]
-
-            np.ins
-
-            group_unique, group_index, group_inverse = self.xp.unique(groups_knots, return_index=True, return_counts=False, return_inverse=True)
-
-            diff_temp = self.xp.ones_like(group_inverse)
-            diff_temp[1:] = (~self.xp.diff(group_inverse).astype(bool)).astype(int)
-
-            inds_per_group = (self.xp.cumsum(diff_temp) - 1)
-            inds_group_subtract = inds_per_group[group_index][group_inverse]
-            inds_per_group = inds_per_group - inds_group_subtract
-
-            ngroups = leftedge_full.shape[0] #? (group_unique.max().item() - group_unique.min().item() ) + 1
-            maxgroups = self.Nknotsmax #? group_count.max().item() if group_count.shape[0] > 0 else 0
-
-            knots_full_nans = self.xp.full((ngroups, maxgroups, knots_full.shape[-1]), self.xp.nan)
-            if leftedge_full.shape[0] != ngroups:
-                breakpoint()
-
-            leftedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.leftedge), leftedge_full), axis=1)[:, None, :]
-            rightedge_full = self.xp.concatenate((self.xp.full((ngroups,1), self.rightedge), rightedge_full), axis=1)[:, None, :]
-
-            knots_full_nans[(groups_knots, inds_per_group)] = knots_full
-        
-            knots_full_nans = self.xp.concatenate((leftedge_full, knots_full_nans, rightedge_full), axis = 1)
-
-            positions = knots_full_nans[:,:,:1]
-            weights = knots_full_nans[:,:,1:]
-
-            order = self.xp.argsort(positions, axis = 1)
-            sortedpositions = self.xp.take_along_axis(positions, order, axis=1)
-
-            if (args[1].shape[-1] == self.Ncov + 1):
-                sortedpositions = self.xp.repeat(sortedpositions, self.Ncov, axis = -1).transpose(2,0,1)
-            else:
-                sortedpositions = sortedpositions.transpose(2,0,1)
-
-            sortedweights = self.xp.take_along_axis(weights, order, axis=1).transpose(2,0,1)
-
-        else:
-            edges_weights = self.xp.asarray(args[0])
-            leftedge_full = edges_weights[:, 0::2]
-            rightedge_full = edges_weights[:, 1::2]
-
-            args_knots = [self.xp.asarray(arg) for arg in args[1:]] #still a list
-            groups_knots = groups[1:] #still a list
-
-            # groups_unique = np.unique(groups[0])
-            # ngroups = (groups_unique.max().item() - groups_unique.min().item()) + 1
-
-            ngroups = groups[0].shape[0] # RJ is not used in this branch, since it is the one handling the edges. there will be only one leaf per group
-
-            maxgroups = self.Nknotsmax  
-            
-            knots_full_nans = self.xp.full((ngroups, maxgroups, 2*self.Ncov), self.xp.nan)
-            leftedge_full = self.xp.concatenate((self.xp.full((ngroups, self.Ncov), self.leftedge), leftedge_full), axis=1)[:, None, :]
-            rightedge_full = self.xp.concatenate((self.xp.full((ngroups, self.Ncov), self.rightedge), rightedge_full), axis=1)[:, None, :]
-
-            for j, (arg, group) in enumerate(zip(args_knots, groups_knots)):
-                group = self.xp.asarray(group)
-                #? group_unique, group_index, group_inverse, group_count = self.xp.unique(group, return_index=True, return_counts=True, return_inverse=True)
-                group_unique, group_index, group_inverse = self.xp.unique(group, return_index=True, return_counts=False, return_inverse=True)
-
-                diff_temp = self.xp.ones_like(group_inverse)
-                diff_temp[1:] = (~self.xp.diff(group_inverse).astype(bool)).astype(int)
-
-                inds_per_group = (self.xp.cumsum(diff_temp) - 1)
-                inds_group_subtract = inds_per_group[group_index][group_inverse]
-                inds_per_group = inds_per_group - inds_group_subtract
-
-                knots_full_nans[:,:, j][(group, inds_per_group)] = arg[:, 0]
-                knots_full_nans[:,:, self.Ncov + j][(group, inds_per_group)] = arg[:, 1]
-
-            knots_full_nans = self.xp.concatenate((leftedge_full, knots_full_nans, rightedge_full), axis = 1)
-
-            positions = knots_full_nans[:,:,:self.Ncov]
-            weights = knots_full_nans[:,:,self.Ncov:]
-
-            order = self.xp.argsort(positions, axis = 1)
-            sortedpositions = self.xp.take_along_axis(positions, order, axis=1).transpose(2,0,1)
-            sortedweights = self.xp.take_along_axis(weights, order, axis=1).transpose(2,0,1)
-
-        return sortedpositions, sortedweights
-        
     
     def prepare_interp_input_with_edges(self, args, groups, ngroups=0):
         """
@@ -1043,13 +947,14 @@ class Psd(BaseNoise, StochasticContribution):
         """Process a single foreground component"""
         fore = self.foregrounds[j]
         kwargs_here = kwargs_all.get(fore, {})
-        
-        Shs = self.foregrounds_fn[j](freqs, foreargs[j], **kwargs_here)
+        Shs, base, index = self.base_foreground(freqs, foreargs, j, **kwargs_here)
+
+        #Shs = self.foregrounds_fn[j](freqs, foreargs[j], **kwargs_here)
         nin = Shs.shape[0]
-        
+
         if self.foregroundperturbation:
             if self.kwargs['perturbation_type'] == 'spline':
-                Shs = self.apply_splines_fore(Shs, freqs, foreargs, foregroups, base=self.nforegrounds, index=j)
+                Shs = self.apply_splines_fore(Shs, freqs, foreargs, foregroups, base=base, index=index)
             elif self.kwargs['perturbation_type'] == 'bump':
                 bump_args, bump_groups = foreargs[self.nforegrounds+j:self.nforegrounds+(j+1)][0], foregroups[self.nforegrounds+j:self.nforegrounds+(j+1)][0]
                 bumps = self.log_gaussian_bump_rj(freqs, bump_args, bump_groups, nin)
@@ -1096,18 +1001,12 @@ class Psd(BaseNoise, StochasticContribution):
         - PSDS (array-like): The total PSD in each channel.
         
         '''
-        tic = time.time()
         PSDS = self.noisefn(freqs=freqs, args=noiseargs, groups=noisegroups, **kwargs['noise'])
-        toc = time.time()
         # print(f'--- noise time: {toc-tic}')
-        tic = time.time()
         PSDS = self.handle_backgrounds(PSDS, freqs, backargs, backgroups, kwargs)
-        toc = time.time()
         # print(f'--- backgrounds time: {toc-tic}')
-        tic = time.time()
         PSDS = self.handle_foregrounds(PSDS, freqs, foreargs, foregroups, kwargs)
 
-        toc = time.time()
         # print(f'--- foreground time: {toc-tic}')
         
 

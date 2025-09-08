@@ -215,10 +215,10 @@ class BaseNoise(GPUobject):
         GPUobject.__init__(self, use_gpu=use_gpu, interpkwargs=interpkwargs)
         if custom_armlength is not None:
             self.armlength = custom_armlength
-            print('Using custom armlength: {}'.format(custom_armlength))
+            # print('Using custom armlength: {}'.format(custom_armlength))
         else:
             self.armlength = ARMLENGTH_AVERAGE
-            print('Using default armlength: {}'.format(self.armlength))
+            # print('Using default armlength: {}'.format(self.armlength))
         self.fs = fs if fs is not None else FS
         self.FMIN = 1 / (T * YRSID_SI)
 
