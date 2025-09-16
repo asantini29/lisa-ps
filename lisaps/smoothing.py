@@ -10,51 +10,7 @@ jax.config.update("jax_enable_x64", True)
             # smooting routines #
 # ----------------------------------------- #
 
-def log_bin(freqs, power, bins_per_decade=10):
-    """
-    JAX-optimized logarithmic binning for frequency data.
-    
-    Args:
-        freqs: Array of frequencies
-        power: Array of power values
-        bins_per_decade: Number of bins per decade of frequency
-    
-    Returns:
-        tuple: (bin_centers, binned_power)
-    """
-    log_freqs = jnp.log10(freqs)
-    
-    # Create bins
-    bins = jnp.linspace(
-        log_freqs.min(), 
-        log_freqs.max(),
-        ((log_freqs.max() - log_freqs.min()) * bins_per_decade).astype(jnp.int32)
-    )
-    
-    # Digitize using searchsorted
-    digits = jnp.searchsorted(bins, log_freqs)
-
-    #compute bin counts
-    bin_counts = jnp.bincount(digits, minlength=len(bins))
-    
-    # Calculate bin centers
-    bin_centers = 10 ** ((bins[1:] + bins[:-1]) / 2)
-    
-    # Compute means for each bin using a vectorized approach
-    @jax.vmap
-    def bin_mean(i):
-        mask = digits == i
-        return jnp.where(
-            mask.sum() > 0,
-            (power * mask[:, None]).sum() / mask.sum(),
-            0.0
-        )
-    
-    binned_power = bin_mean(jnp.arange(1, len(bins)))
-    
-    return bin_centers, binned_power, bin_counts
-
-def adaptive_log_bin(freqs, power, f_min=None, f_max=None, min_bpd=5, max_bpd=50, order='increasing', **kwargs):
+def adaptive_log_bin(freqs, power, f_min=None, f_max=None, n_sections=50, min_bpd=5, max_bpd=50, order='increasing', **kwargs):
     """
     Adaptive logarithmic binning with varying bins per decade.
     
@@ -62,6 +18,7 @@ def adaptive_log_bin(freqs, power, f_min=None, f_max=None, min_bpd=5, max_bpd=50
         freqs: Array of frequencies (must be sorted)
         power: Array of power values
         f_min, f_max: Frequency range of interest
+        n_sections: Number of sections to divide the range into
         min_bpd, max_bpd: Minimum and maximum bins per decade
         order: Order of bin density variation ('increasing' or 'decreasing')
 
@@ -85,7 +42,6 @@ def adaptive_log_bin(freqs, power, f_min=None, f_max=None, min_bpd=5, max_bpd=50
     # Create adaptive bin edges
     # We'll use a quadratic scaling for bins per decade
     decades = log_fmax - log_fmin
-    n_sections = 50  # number of sections to divide the range into
     
     # Create array of local bins per decade that varies with frequency
     positions = jnp.linspace(0, 1, n_sections)
