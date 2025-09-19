@@ -1,6 +1,11 @@
 import jax
 import jax.numpy as jnp
+# if jax.devices()[0].platform == 'cpu':
+#     from scipy.ndimage import median_filter
+# else:
+#     from cupyx.scipy.ndimage import median_filter
 from functools import partial
+from tqdm import tqdm
 
 import numpy as np
 
@@ -91,15 +96,32 @@ def adaptive_log_bin(freqs, power, f_min=None, f_max=None, n_sections=50, min_bp
             jnp.sum(power * mask.reshape(mask.shape + (1,) * (len(power.shape) - 1)), axis=0) / mask.sum(),
             0.0
         )
+
+    # Compute medians for each bin using a vectorized approach
+    # @jax.vmap
+    # def bin_median(i):
+    #     mask = digits == i
+    #     # Add extra dimension(s) to mask to match the length of power.shape
+    #     norm = 1/0.7023319615912207
+    #     selected = power[mask]
+    #     return jnp.where(
+    #         mask.sum() > 0,
+    #         norm * jnp.median(selected, axis=0),
+    #         0.0
+    #         )
     
     # do this in chunks to avoid memory issues
     
     all_bins = jnp.arange(1, len(bin_edges)) 
-    chunk_size = 100
+    chunk_size = 1000
+
+    # if method not in ['mean', 'median']:
+    #     raise ValueError("Invalid method argument. Choose 'mean' or 'median'")
+    bin_fn = bin_mean #if method=='mean' else bin_median
 
     while True:
         try:
-            binned_power = jnp.concatenate([bin_mean(all_bins[i:i+chunk_size]) for i in range(0, len(all_bins), chunk_size)], axis=0)
+            binned_power = jnp.concatenate([bin_fn(all_bins[i:i+chunk_size]) for i in tqdm(range(0, len(all_bins), chunk_size))], axis=0)
             break
         except:
             chunk_size = chunk_size // 2
@@ -131,7 +153,7 @@ def get_bin_statistics(freqs, log_bin_edges):
         'bin_edges_hz': 10**log_bin_edges,
     }
 
-def average_periodogram_static(freqs, power, f_min=None, f_max=None, f_segments=1e-5, **kwargs):
+def average_periodogram_static(freqs, power, f_min=None, f_max=None, f_segments=1e-5, n_segments=None, **kwargs):
         """
         Average the periodogram matrix over segments. Snippet credits: Nikolaos Karnesis.
         
@@ -153,25 +175,28 @@ def average_periodogram_static(freqs, power, f_min=None, f_max=None, f_segments=
         segment_sizes : array
             The sizes of the frequency segments.
         """
-
     
         df = (freqs[1] - freqs[0])
-        if isinstance(f_segments, float):
-            # Smoothing bandwidth
-            bandwidth = int(f_segments / df)
-            # Segment frequencies
-            f_segments_arr = freqs[0::bandwidth]
-            # Add the last frequency if it is not included
-            if freqs[-1] not in f_segments_arr:
-                f_segments_arr = jnp.concatenate((f_segments_arr, jnp.atleast_1d(freqs[-1])))
-        elif hasattr(f_segments, '__array__') or isinstance(f_segments, list):
-            f_segments_arr = jnp.asarray(f_segments)
-        else:
-            raise TypeError("f0 should be a float or array_like")
-        
-        # Number of segments
-        n_seg = len(f_segments_arr)
+        if n_segments is None:
+            if isinstance(f_segments, float):
+                # Smoothing bandwidth
+                bandwidth = int(f_segments / df)
+                # Segment frequencies
+                f_segments_arr = freqs[0::bandwidth]
+                # Add the last frequency if it is not included
+                if freqs[-1] not in f_segments_arr:
+                    f_segments_arr = jnp.concatenate((f_segments_arr, jnp.atleast_1d(freqs[-1])))
+            elif hasattr(f_segments, '__array__') or isinstance(f_segments, list):
+                f_segments_arr = jnp.asarray(f_segments)
+            else:
+                raise TypeError("f0 should be a float or array_like")
+            
+            # Number of segments
+            n_segments = len(f_segments_arr)
         # Indices of the segment bounds
+        else:
+            f_segments_arr = jnp.linspace(freqs[0], freqs[-1], n_segments)
+
         i_seg = np.round(f_segments_arr / df).astype(int)
         # Sizes of all intervals
         segment_sizes = i_seg[1:] - i_seg[:-1]
@@ -179,9 +204,27 @@ def average_periodogram_static(freqs, power, f_min=None, f_max=None, f_segments=
         freqs_h = (f_segments_arr[:-1] + f_segments_arr[1:]) / 2.0
 
         # Compute the averages over each segment
+        # if method == 'mean':
         power_avg = jnp.array(
             [jnp.sum(power[i_seg[j]:i_seg[j+1]], axis=0) / segment_sizes[j]
-            for j in range(n_seg-1)], dtype=power.dtype)
+            for j in range(n_segments-1)], dtype=power.dtype)
+        
+        # elif method == 'median':
+        #     norm = 1/0.7023319615912207
+
+        #     power_avg = jnp.array(
+        #         [norm * jnp.median(power.real[i_seg[j]:i_seg[j+1]], axis=0)
+        #         for j in tqdm(range(n_segments-1))], dtype=power.dtype)
+        
+        # elif method == 'median_filter':
+        #     power_avg = jnp.array(
+        #                         median_filter(power.real, size=(max(segment_sizes), 1)) + 
+        #                         median_filter(power.imag, size=(max(segment_sizes), 1)),
+        #                         dtype=power.dtype
+        #                         )
+            
+        # else:
+        #     raise ValueError("Invalid method argument. Choose 'mean' or 'median'.")
 
         # mask out the frequencies outside the specified range
         f_min = f_min or freqs_h.min()
